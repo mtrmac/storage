@@ -174,11 +174,20 @@ type DiffOptions struct {
 	Compression *archive.Compression
 }
 
+// layerReadToken is a type representing the capability to read from layerStore.
+// It should ONLY EVER be created by layerStore; callers MUST NOT create, copy, or retain
+// the value.
+type layerReadToken struct {
+	// This could, potentially, in debugging situations, contain:
+	// - a pointer to the store, to prevent mix&match errors
+	// - a lifetime / validity value, to prevent use-after-unlock
+	// - Lock and Unlock methods, to prevent copies of the value
+}
+
 // roLayerStore wraps a graph driver, adding the ability to refer to layers by
 // name, and keeping track of parent-child relationships, along with a list of
 // all known layers.
 type roLayerStore interface {
-	roMetadataStore
 	roLayerBigDataStore
 
 	// startReading makes sure the store is fresh, and locks it for reading.
@@ -188,8 +197,15 @@ type roLayerStore interface {
 	// stopReading releases locks obtained by startReading.
 	stopReading()
 
+	// metadata reads metadata associated with an item with the specified ID.
+	metadata(token layerReadToken, id string) (string, error)
+
 	// Exists checks if a layer with the specified name or ID is known.
+	//
+	// Deprecated: Use exists().
 	Exists(id string) bool
+	// exists checks if a layer with the specified name or ID is known.
+	exists(token layerReadToken, id string) bool
 
 	// Get retrieves information about a layer given an ID or name.
 	Get(id string) (*Layer, error)
@@ -1087,7 +1103,54 @@ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (roL
 	return &rlstore, nil
 }
 
+// privateWithLayerReadToken obtains a layerReadToken and calls fn
+// DO NOT CALL THIS from outside of layerStore.
+// Almost all users should call layerReadAccess() instead.
+func (r *layerStore) privateWithLayerReadToken(fn func(token layerReadToken)) {
+	// TO DO: Actually make this safe against concurrent writers
+	token := layerReadToken{}
+	fn(token)
+}
+
+// layerReadAccess ensures that it is safe to read the store, makes sure it is fresh, and calls fn().
+// It returns the return value of fn(), but it may also return ({}, err, true) on error reading the store.
+// The bool parameter is usually named "done", and used by the caller to actually use the first return value.
+//
+// Typical usage:
+//
+//	if data, done, err := layerReadAccess(store, func(…) {
+//		…
+//	}; done {
+//		return data, err
+//	}
+//
+// (This is _probably_ not the desired end state, but it is useful to avoid redesigning every single caller.)
+//
+// While fn is running, there are no concurrent writers to the store, and methods that
+// need a layerReadToken can be called.
+// Callers MUST NOT save token and use it after layerReadAccess terminates.
+func layerReadAccess[T any](r roLayerStore, fn func(token layerReadToken) (T, bool, error)) (T, bool, error) {
+	var res T // A zero value of T
+
+	store, ok := r.(*layerStore)
+	if !ok {
+		return res, true, errors.New("internal error: roLayerStore is not a *layerStore")
+	}
+
+	if err := r.startReading(); err != nil {
+		return res, true, err
+	}
+	defer r.stopReading()
+	var done bool
+	var err error
+	store.privateWithLayerReadToken(func(token layerReadToken) {
+		res, done, err = fn(token)
+	})
+	return res, done, err
+}
+
 // Requires startReading or startWriting.
+// FIXME: Require layerReadToken
 func (r *layerStore) lookup(id string) (*Layer, bool) {
 	if layer, ok := r.byid[id]; ok {
 		return layer, ok
@@ -1660,8 +1723,7 @@ func (r *layerStore) datapath(id, key string) string {
 	return filepath.Join(r.datadir(id), makeBigDataBaseName(key))
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) BigData(id, key string) (io.ReadCloser, error) {
+func (r *layerStore) bigData(_ layerReadToken, id, key string) (io.ReadCloser, error) {
 	if key == "" {
 		return nil, fmt.Errorf("can't retrieve layer big data value for empty name: %w", ErrInvalidBigDataName)
 	}
@@ -1720,17 +1782,15 @@ func (r *layerStore) SetBigData(id, key string, data io.Reader) error {
 	return nil
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) BigDataNames(id string) ([]string, error) {
+func (r *layerStore) bigDataNames(_ layerReadToken, id string) ([]string, error) {
 	layer, ok := r.lookup(id)
 	if !ok {
-		return nil, fmt.Errorf("locating layer with ID %q to retrieve bigdata names: %w", id, ErrImageUnknown)
+		return nil, fmt.Errorf("locating layer with ID %q to retrieve bigdata names: %w", id, ErrLayerUnknown)
 	}
 	return copyStringSlice(layer.BigDataNames), nil
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) Metadata(id string) (string, error) {
+func (r *layerStore) metadata(_ layerReadToken, id string) (string, error) {
 	if layer, ok := r.lookup(id); ok {
 		return layer.Metadata, nil
 	}
@@ -1884,7 +1944,16 @@ func (r *layerStore) Delete(id string) error {
 }
 
 // Requires startReading or startWriting.
+// Deprecated: Use exists()
 func (r *layerStore) Exists(id string) bool {
+	var res bool
+	r.privateWithLayerReadToken(func(token layerReadToken) {
+		res = r.exists(token, id)
+	})
+	return res
+}
+
+func (r *layerStore) exists(_ layerReadToken, id string) bool {
 	_, ok := r.lookup(id)
 	return ok
 }

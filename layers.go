@@ -184,6 +184,18 @@ type layerReadToken struct {
 	// - Lock and Unlock methods, to prevent copies of the value
 }
 
+// layerWriteToken is a type representing the capability to write to layerStore.
+// It should ONLY EVER be created by layerStore; callers MUST NOT create, copy, or retain
+// the value.
+type layerWriteToken struct {
+	// FIXME: Make layerReadToken an interface which is implemented by both the read and write tokens, instead
+	readToken layerReadToken
+	// This could, potentially, in debugging situations, contain:
+	// - a pointer to the store, to prevent mix&match errors
+	// - a lifetime / validity value, to prevent use-after-unlock
+	// - Lock and Unlock methods, to prevent copies of the value
+}
+
 // roLayerStore wraps a graph driver, adding the ability to refer to layers by
 // name, and keeping track of parent-child relationships, along with a list of
 // all known layers.
@@ -280,7 +292,7 @@ type rwLayerStore interface {
 	Put(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error)
 
 	// updateNames modifies names associated with a layer based on (op, names).
-	updateNames(id string, names []string, op updateNameOperation) error
+	updateNames(token layerWriteToken, id string, names []string, op updateNameOperation) error
 
 	// Delete deletes a layer with the specified name or ID.
 	Delete(id string) error
@@ -914,6 +926,7 @@ func (r *layerStore) loadMounts() error {
 // save saves the contents of the store to disk.
 // The caller must hold r.lockfile locked for writing.
 // The caller must hold r.inProcessLock for WRITING.
+// FIXME: require layerWriteToken
 func (r *layerStore) save(saveLocations layerLocations) error {
 	r.mountsLockfile.Lock()
 	defer r.mountsLockfile.Unlock()
@@ -1112,6 +1125,15 @@ func (r *layerStore) privateWithLayerReadToken(fn func(token layerReadToken)) {
 	fn(token)
 }
 
+// privateWithLayerWriteToken obtains a layerWriteToken and calls fn
+// DO NOT CALL THIS from outside of layerStore.
+// Almost all users should call layerWriteAccess() instead.
+func (r *layerStore) privateWithLayerWriteToken(fn func(token layerWriteToken)) {
+	// TO DO: Actually make this safe against concurrent writers
+	token := layerWriteToken{}
+	fn(token)
+}
+
 // layerReadAccess ensures that it is safe to read the store, makes sure it is fresh, and calls fn().
 // It returns the return value of fn(), but it may also return ({}, err, true) on error reading the store.
 // The bool parameter is usually named "done", and used by the caller to actually use the first return value.
@@ -1147,6 +1169,29 @@ func layerReadAccess[T any](r roLayerStore, fn func(token layerReadToken) (T, bo
 		res, done, err = fn(token)
 	})
 	return res, done, err
+}
+
+// layerWriteAccess ensures that it is safe to write to store, makes sure it is fresh, and calls fn().
+// It returns the return value of fn(), but it may also return its own error on error reading the store.
+//
+// While fn is running, there are no concurrent writers to the store, and methods that
+// need a layerWriteToken can be called.
+// Callers MUST NOT save token and use it after layerReadAccess terminates.
+func layerWriteAccess(r rwLayerStore, fn func(token layerWriteToken) error) error {
+	store, ok := r.(*layerStore)
+	if !ok {
+		return errors.New("internal error: roLayerStore is not a *layerStore")
+	}
+
+	if err := r.startWriting(); err != nil {
+		return err
+	}
+	defer r.stopWriting()
+	var err error
+	store.privateWithLayerWriteToken(func(token layerWriteToken) {
+		err = fn(token)
+	})
+	return err
 }
 
 // Requires startReading or startWriting.
@@ -1684,15 +1729,12 @@ func (r *layerStore) ParentOwners(id string) (uids, gids []int, err error) {
 }
 
 // Requires startWriting.
+// FIXME: require layerWriteToken
 func (r *layerStore) removeName(layer *Layer, name string) {
 	layer.Names = stringSliceWithoutValue(layer.Names, name)
 }
 
-// Requires startWriting.
-func (r *layerStore) updateNames(id string, names []string, op updateNameOperation) error {
-	if !r.lockfile.IsReadWrite() {
-		return fmt.Errorf("not allowed to change layer name assignments at %q: %w", r.layerdir, ErrStoreIsReadOnly)
-	}
+func (r *layerStore) updateNames(token layerWriteToken, id string, names []string, op updateNameOperation) error {
 	layer, ok := r.lookup(id)
 	if !ok {
 		return ErrLayerUnknown
@@ -1735,7 +1777,16 @@ func (r *layerStore) bigData(_ layerReadToken, id, key string) (io.ReadCloser, e
 }
 
 // Requires startWriting.
+// Deprecated: Use setBigData
 func (r *layerStore) SetBigData(id, key string, data io.Reader) error {
+	var err error
+	r.privateWithLayerWriteToken(func(token layerWriteToken) {
+		err = r.setBigData(token, id, key, data)
+	})
+	return err
+}
+
+func (r *layerStore) setBigData(token layerWriteToken, id, key string, data io.Reader) error {
 	if key == "" {
 		return fmt.Errorf("can't set empty name for layer big data item: %w", ErrInvalidBigDataName)
 	}

@@ -5,9 +5,11 @@ run:
 linters:
   enable-all: true
   disable:
+    - deadcode
     - dogsled
     - dupl
     - errcheck
+    - exhaustivestruct
     - funlen
     - gochecknoglobals
     - gochecknoinits
@@ -15,15 +17,19 @@ linters:
     - gocritic
     - gocyclo
     - godox
+    - golint
     - gomnd
     - gosec
     - gosimple
     - govet
+    - ifshort
     - ineffassign
+    - interfacer
     - lll
     - maligned
     - misspell
     - nakedret
+    - nosnakecase
     - prealloc
     - scopelint
     - staticcheck
@@ -31,7 +37,6 @@ linters:
     - stylecheck
     - unconvert
     - unparam
-    - unused
     - varcheck
     - whitespace
     - wsl

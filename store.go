@@ -1231,10 +1231,11 @@ func (s *store) PutLayer(id, parent string, names []string, mountLabel string, w
 	if err != nil {
 		return nil, -1, err
 	}
-	if err := rlstore.startWriting(); err != nil {
+	layerToken, err := rlstore.startWriting()
+	if err != nil {
 		return nil, -1, err
 	}
-	defer rlstore.stopWriting()
+	defer rlstore.stopWriting(layerToken)
 	if err := s.containerStore.startWriting(); err != nil {
 		return nil, -1, err
 	}
@@ -1255,10 +1256,11 @@ func (s *store) PutLayer(id, parent string, names []string, mountLabel string, w
 		for _, l := range append([]roLayerStore{rlstore}, rlstores...) {
 			lstore := l
 			if lstore != rlstore {
-				if err := lstore.startReading(); err != nil {
+				lToken, err := lstore.startReading()
+				if err != nil {
 					return nil, -1, err
 				}
-				defer lstore.stopReading()
+				defer lstore.stopReading(lToken)
 			}
 			if l, err := lstore.Get(parent); err == nil && l != nil {
 				ilayer = l
@@ -1324,10 +1326,11 @@ func (s *store) CreateImage(id string, names []string, layer, metadata string, o
 		var ilayer *Layer
 		for _, s := range layerStores {
 			store := s
-			if err := store.startReading(); err != nil {
+			lToken, err := store.startReading()
+			if err != nil {
 				return nil, err
 			}
-			defer store.stopReading()
+			defer store.stopReading(lToken)
 			ilayer, err = store.Get(layer)
 			if err == nil {
 				break
@@ -1491,16 +1494,18 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 	// s.roImageStores are NOT NECESSARILY ALL locked read-only if image != ""
 	var cimage *Image // Set if image != ""
 	if image != "" {
-		if err := rlstore.startWriting(); err != nil {
+		layerToken, err := rlstore.startWriting()
+		if err != nil {
 			return nil, err
 		}
-		defer rlstore.stopWriting()
+		defer rlstore.stopWriting(layerToken)
 		for _, s := range lstores {
 			store := s
-			if err := store.startReading(); err != nil {
+			lToken, err := store.startReading()
+			if err != nil {
 				return nil, err
 			}
-			defer store.stopReading()
+			defer store.stopReading(lToken)
 		}
 		if err := s.imageStore.startWriting(); err != nil {
 			return nil, err
@@ -1557,10 +1562,11 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 			}
 		}
 	} else {
-		if err := rlstore.startWriting(); err != nil {
+		layerToken, err := rlstore.startWriting()
+		if err != nil {
 			return nil, err
 		}
-		defer rlstore.stopWriting()
+		defer rlstore.stopWriting(layerToken)
 		if !options.HostUIDMapping && len(options.UIDMap) == 0 {
 			uidMap = s.uidMap
 		}
@@ -1817,10 +1823,11 @@ func (s *store) ImageSize(id string) (int64, error) {
 	}
 	for _, s := range layerStores {
 		store := s
-		if err := store.startReading(); err != nil {
+		token, err := store.startReading()
+		if err != nil {
 			return -1, err
 		}
-		defer store.stopReading()
+		defer store.stopReading(token)
 	}
 
 	// Look for the image's record.
@@ -1911,10 +1918,11 @@ func (s *store) ContainerSize(id string) (int64, error) {
 	}
 	for _, s := range layerStores {
 		store := s
-		if err := store.startReading(); err != nil {
+		token, err := store.startReading()
+		if err != nil {
 			return -1, err
 		}
-		defer store.stopReading()
+		defer store.stopReading(token)
 	}
 
 	// Get the location of the container directory and container run directory.
@@ -2472,10 +2480,11 @@ func (s *store) mount(id string, options drivers.MountOpts) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := rlstore.startWriting(); err != nil {
+	token, err := rlstore.startWriting()
+	if err != nil {
 		return "", err
 	}
-	defer rlstore.stopWriting()
+	defer rlstore.stopWriting(token)
 
 	if options.UidMaps != nil || options.GidMaps != nil {
 		options.DisableShifting = !canUseShifting(rlstore, options.UidMaps, options.GidMaps)
@@ -2535,10 +2544,11 @@ func (s *store) Mounted(id string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := rlstore.startReading(); err != nil {
+	token, err := rlstore.startReading()
+	if err != nil {
 		return 0, err
 	}
-	defer rlstore.stopReading()
+	defer rlstore.stopReading(token)
 
 	return rlstore.Mounted(id)
 }
@@ -2609,7 +2619,8 @@ func (s *store) Diff(from, to string, options *DiffOptions) (io.ReadCloser, erro
 
 	for _, s := range layerStores {
 		store := s
-		if err := store.startReading(); err != nil {
+		token, err := store.startReading()
+		if err != nil {
 			return nil, err
 		}
 		if store.Exists(to) {
@@ -2617,15 +2628,15 @@ func (s *store) Diff(from, to string, options *DiffOptions) (io.ReadCloser, erro
 			if rc != nil && err == nil {
 				wrapped := ioutils.NewReadCloserWrapper(rc, func() error {
 					err := rc.Close()
-					store.stopReading()
+					store.stopReading(token)
 					return err
 				})
 				return wrapped, nil
 			}
-			store.stopReading()
+			store.stopReading(token)
 			return rc, err
 		}
-		store.stopReading()
+		store.stopReading(token)
 	}
 	return nil, ErrLayerUnknown
 }
@@ -2730,10 +2741,11 @@ func (s *store) LayerParentOwners(id string) ([]int, []int, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := rlstore.startReading(); err != nil {
+	token, err := rlstore.startReading()
+	if err != nil {
 		return nil, nil, err
 	}
-	defer rlstore.stopReading()
+	defer rlstore.stopReading(token)
 	if rlstore.Exists(id) {
 		return rlstore.ParentOwners(id)
 	}
@@ -2745,10 +2757,11 @@ func (s *store) ContainerParentOwners(id string) ([]int, []int, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := rlstore.startReading(); err != nil {
+	layerToken, err := rlstore.startReading()
+	if err != nil {
 		return nil, nil, err
 	}
-	defer rlstore.stopReading()
+	defer rlstore.stopReading(layerToken)
 	if err := s.containerStore.startReading(); err != nil {
 		return nil, nil, err
 	}
@@ -2870,19 +2883,21 @@ func (al *additionalLayer) PutAs(id, parent string, names []string) (*Layer, err
 	if err != nil {
 		return nil, err
 	}
-	if err := rlstore.startWriting(); err != nil {
+	token, err := rlstore.startWriting()
+	if err != nil {
 		return nil, err
 	}
-	defer rlstore.stopWriting()
+	defer rlstore.stopWriting(token)
 
 	var parentLayer *Layer
 	if parent != "" {
 		for _, lstore := range append([]roLayerStore{rlstore}, rlstores...) {
 			if lstore != rlstore {
-				if err := lstore.startReading(); err != nil {
+				lToken, err := lstore.startReading()
+				if err != nil {
 					return nil, err
 				}
-				defer lstore.stopReading()
+				defer lstore.stopReading(lToken)
 			}
 			parentLayer, err = lstore.Get(parent)
 			if err == nil {
@@ -3087,10 +3102,11 @@ func (s *store) Shutdown(force bool) ([]string, error) {
 	if err != nil {
 		return mounted, err
 	}
-	if err := rlstore.startWriting(); err != nil {
+	layerToken, err := rlstore.startWriting()
+	if err != nil {
 		return nil, err
 	}
-	defer rlstore.stopWriting()
+	defer rlstore.stopWriting(layerToken)
 
 	layers, err := rlstore.Layers()
 	if err != nil {

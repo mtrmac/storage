@@ -203,11 +203,11 @@ type roLayerStore interface {
 	roLayerBigDataStore
 
 	// startReading makes sure the store is fresh, and locks it for reading.
-	// If this succeeds, the caller MUST call stopReading().
-	startReading() error
+	// If this succeeds, the caller MUST call stopReading(token).
+	startReading() (layerReadToken, error)
 
 	// stopReading releases locks obtained by startReading.
-	stopReading()
+	stopReading(token layerReadToken)
 
 	// metadata reads metadata associated with an item with the specified ID.
 	metadata(token layerReadToken, id string) (string, error)
@@ -270,11 +270,11 @@ type rwLayerStore interface {
 	rwLayerBigDataStore
 
 	// startWriting makes sure the store is fresh, and locks it for writing.
-	// If this succeeds, the caller MUST call stopWriting().
-	startWriting() error
+	// If this succeeds, the caller MUST call stopWriting(token).
+	startWriting() (layerWriteToken, error)
 
 	// stopWriting releases locks obtained by startWriting.
-	stopWriting()
+	stopWriting(layerWriteToken)
 
 	// Create creates a new layer, optionally giving it a specified ID rather than
 	// a randomly-generated one, either inheriting data from another specified
@@ -363,7 +363,7 @@ type layerStore struct {
 
 	inProcessLock sync.RWMutex // Can _only_ be obtained with lockfile held.
 	// The following fields can only be read/written with read/write ownership of inProcessLock, respectively.
-	// Almost all users should use startReading() or startWriting().
+	// Almost all callers should use layerReadAccess() or layerWriteAccess().
 	lastWrite           lockfile.LastWrite
 	mountsLastWrite     lockfile.LastWrite // Only valid if lockfile.IsReadWrite()
 	layers              []*Layer
@@ -414,55 +414,105 @@ func copyLayer(l *Layer) *Layer {
 	}
 }
 
+// privateGetLayerWriteToken obtains a layerWriteToken.
+// The caller MUST call privatePutLayerWriteToken.
+// DO NOT CALL THIS from outside of layerStore.
+// Almost all users should call layerWriteAccess() instead.
+func (r *layerStore) privateGetLayerWriteToken() layerWriteToken {
+	r.inProcessLock.Lock()
+	token := layerWriteToken{}
+	return token
+}
+
+// privatePutLayerWriteToken releases a layerWriteToken.
+// DO NOT CALL THIS from outside of layerStore.
+// Almost all users should call layerWriteAccess() instead.
+func (r *layerStore) privatePutLayerWriteToken(token layerWriteToken) {
+	r.inProcessLock.Unlock()
+}
+
+// privateWithFakeLayerWriteToken obtains a  fake layerWriteToken and calls fn
+// DO NOT CALL THIS EVER, it exists only as an interim PR artifact.
+// Almost all users should call layerWriteAccess() instead.
+func (r *layerStore) privateWithFakeLayerWriteToken(fn func(token layerWriteToken)) {
+	token := layerWriteToken{}
+	fn(token)
+}
+
+// privateGetLayerReadToken obtains a layerReadToken.
+// The caller MUST call privatePutLayerReadToken.
+// DO NOT CALL THIS from outside of layerStore.
+// Almost all users should call layerReadAccess() instead.
+func (r *layerStore) privateGetLayerReadToken() layerReadToken {
+	r.inProcessLock.RLock()
+	token := layerReadToken{}
+	return token
+}
+
+// privatePutLayerReadToken releases a layerReadToken.
+// DO NOT CALL THIS from outside of layerStore.
+// Almost all users should call layerReadAccess() instead.
+func (r *layerStore) privatePutLayerReadToken(token layerReadToken) {
+	r.inProcessLock.RUnlock()
+}
+
+// privateWithFakeLayerReadToken obtains a  fake layerReadToken and calls fn
+// DO NOT CALL THIS EVER, it exists only as an interim PR artifact.
+// Almost all users should call layerReadAccess() instead.
+func (r *layerStore) privateWithFakeLayerReadToken(fn func(token layerReadToken)) {
+	token := layerReadToken{}
+	fn(token)
+}
+
 // startWritingWithReload makes sure the store is fresh if canReload, and locks it for writing.
-// If this succeeds, the caller MUST call stopWriting().
+// If this succeeds, the caller MUST call stopWriting(token).
 //
 // This is an internal implementation detail of layerStore construction, every other caller
 // should use startWriting() instead.
-func (r *layerStore) startWritingWithReload(canReload bool) error {
+func (r *layerStore) startWritingWithReload(canReload bool) (layerWriteToken, error) {
 	r.lockfile.Lock()
-	r.inProcessLock.Lock()
+	token := r.privateGetLayerWriteToken()
 	succeeded := false
 	defer func() {
 		if !succeeded {
-			r.inProcessLock.Unlock()
+			r.privatePutLayerWriteToken(token)
 			r.lockfile.Unlock()
 		}
 	}()
 
 	if canReload {
-		if _, err := r.reloadIfChanged(true); err != nil {
-			return err
+		if _, err := r.reloadIfChanged(token, true); err != nil {
+			return layerWriteToken{}, err
 		}
 	}
 
 	succeeded = true
-	return nil
+	return token, nil
 }
 
 // startWriting makes sure the store is fresh, and locks it for writing.
 // If this succeeds, the caller MUST call stopWriting().
-func (r *layerStore) startWriting() error {
+func (r *layerStore) startWriting() (layerWriteToken, error) {
 	return r.startWritingWithReload(true)
 }
 
 // stopWriting releases locks obtained by startWriting.
-func (r *layerStore) stopWriting() {
-	r.inProcessLock.Unlock()
+func (r *layerStore) stopWriting(token layerWriteToken) {
+	r.privatePutLayerWriteToken(token)
 	r.lockfile.Unlock()
 }
 
 // startReadingWithReload makes sure the store is fresh if canReload, and locks it for reading.
-// If this succeeds, the caller MUST call stopReading().
+// If this succeeds, the caller MUST call stopReading(token).
 //
 // This is an internal implementation detail of layerStore construction, every other caller
 // should use startReading() instead.
-func (r *layerStore) startReadingWithReload(canReload bool) error {
+func (r *layerStore) startReadingWithReload(canReload bool) (layerReadToken, error) {
 	// inProcessLocked calls the nested function with r.inProcessLock held for writing.
-	inProcessLocked := func(fn func() error) error {
-		r.inProcessLock.Lock()
-		defer r.inProcessLock.Unlock()
-		return fn()
+	inProcessLocked := func(fn func(writeToken layerWriteToken) error) error {
+		writeToken := r.privateGetLayerWriteToken()
+		defer r.privatePutLayerWriteToken(writeToken)
+		return fn(writeToken)
 	}
 
 	r.lockfile.RLock()
@@ -472,19 +522,21 @@ func (r *layerStore) startReadingWithReload(canReload bool) error {
 			unlockFn()
 		}
 	}()
-	r.inProcessLock.RLock()
-	unlockFn = r.stopReading
+	readToken := r.privateGetLayerReadToken()
+	unlockFn = func() {
+		r.stopReading(readToken)
+	}
 
 	if canReload {
 		// If we are lucky, we can just hold the read locks, check that we are fresh, and continue.
 		modified, err := r.modified()
 		if err != nil {
-			return err
+			return layerReadToken{}, err
 		}
 		if modified {
 			// We are unlucky, and need to reload.
 			// NOTE: Multiple goroutines can get to this place approximately simultaneously.
-			r.inProcessLock.RUnlock()
+			r.privatePutLayerReadToken(readToken)
 			unlockFn = r.lockfile.Unlock
 
 			cleanupsDone := 0
@@ -493,19 +545,19 @@ func (r *layerStore) startReadingWithReload(canReload bool) error {
 				// r.inProcessLock will serialize all goroutines that got here;
 				// each will re-check on-disk state vs. r.lastWrite, and the first one will actually reload the data.
 				var tryLockedForWriting bool
-				err := inProcessLocked(func() error {
+				err := inProcessLocked(func(writeToken layerWriteToken) error {
 					var err error
-					tryLockedForWriting, err = r.reloadIfChanged(false)
+					tryLockedForWriting, err = r.reloadIfChanged(writeToken, false)
 					return err
 				})
 				if err == nil {
 					break
 				}
 				if !tryLockedForWriting {
-					return err
+					return layerReadToken{}, err
 				}
 				if cleanupsDone >= maxLayerStoreCleanupIterations {
-					return fmt.Errorf("(even after %d cleanup attempts:) %w", cleanupsDone, err)
+					return layerReadToken{}, fmt.Errorf("(even after %d cleanup attempts:) %w", cleanupsDone, err)
 				}
 				// Not good enough, we need r.lockfile held for writing. So, let’s do that.
 				unlockFn()
@@ -513,11 +565,11 @@ func (r *layerStore) startReadingWithReload(canReload bool) error {
 
 				r.lockfile.Lock()
 				unlockFn = r.lockfile.Unlock
-				if err := inProcessLocked(func() error {
-					_, err := r.reloadIfChanged(true)
+				if err := inProcessLocked(func(writeToken layerWriteToken) error {
+					_, err := r.reloadIfChanged(writeToken, true)
 					return err
 				}); err != nil {
-					return err
+					return layerReadToken{}, err
 				}
 				unlockFn()
 				unlockFn = nil
@@ -529,30 +581,30 @@ func (r *layerStore) startReadingWithReload(canReload bool) error {
 				cleanupsDone++
 			}
 
-			// NOTE that we hold neither a read nor write inProcessLock at this point. That’s fine in ordinary operation, because
+			// NOTE that we hold neither a read nor write token at this point. That’s fine in ordinary operation, because
 			// the on-filesystem r.lockfile should protect us against (cooperating) writers, and any use of r.inProcessLock
 			// protects us against in-process writers modifying data.
 			// In presence of non-cooperating writers, we just ensure that 1) the in-memory data is not clearly out-of-date
 			// and 2) access to the in-memory data is not racy;
 			// but we can’t protect against those out-of-process writers modifying _files_ while we are assuming they are in a consistent state.
 
-			r.inProcessLock.RLock()
+			readToken = r.privateGetLayerReadToken()
 		}
 	}
 
 	unlockFn = nil
-	return nil
+	return readToken, nil
 }
 
 // startReading makes sure the store is fresh, and locks it for reading.
 // If this succeeds, the caller MUST call stopReading().
-func (r *layerStore) startReading() error {
+func (r *layerStore) startReading() (layerReadToken, error) {
 	return r.startReadingWithReload(true)
 }
 
 // stopReading releases locks obtained by startReading.
-func (r *layerStore) stopReading() {
-	r.inProcessLock.RUnlock()
+func (r *layerStore) stopReading(token layerReadToken) {
+	r.privatePutLayerReadToken(token)
 	r.lockfile.Unlock()
 }
 
@@ -563,6 +615,7 @@ func (r *layerStore) stopReading() {
 //
 // The caller must hold r.lockfile for reading _or_ writing.
 // The caller must hold r.inProcessLock for reading or writing.
+// FIXME: Use layerReadToken
 func (r *layerStore) modified() (bool, error) {
 	_, m, err := r.layersModified()
 	if err != nil {
@@ -629,7 +682,7 @@ func (r *layerStore) layersModified() (lockfile.LastWrite, bool, error) {
 //
 // If !lockedForWriting and this function fails, the return value indicates whether
 // reloadIfChanged() with lockedForWriting could succeed.
-func (r *layerStore) reloadIfChanged(lockedForWriting bool) (bool, error) {
+func (r *layerStore) reloadIfChanged(token layerWriteToken, lockedForWriting bool) (bool, error) {
 	lastWrite, layersModified, err := r.layersModified()
 	if err != nil {
 		return false, err
@@ -732,6 +785,7 @@ func (r *layerStore) mountspath() string {
 //
 // If !lockedForWriting and this function fails, the return value indicates whether
 // retrying with lockedForWriting could succeed.
+// FIXME: Use layerWriteToken
 func (r *layerStore) load(lockedForWriting bool) (bool, error) {
 	var modifiedLocations layerLocations
 
@@ -1064,10 +1118,11 @@ func (s *store) newLayerStore(rundir string, layerdir string, driver drivers.Dri
 
 		driver: driver,
 	}
-	if err := rlstore.startWritingWithReload(false); err != nil {
+	token, err := rlstore.startWritingWithReload(false)
+	if err != nil {
 		return nil, err
 	}
-	defer rlstore.stopWriting()
+	defer rlstore.stopWriting(token)
 	lw, err := rlstore.lockfile.GetLastWrite()
 	if err != nil {
 		return nil, err
@@ -1101,10 +1156,11 @@ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (roL
 
 		driver: driver,
 	}
-	if err := rlstore.startReadingWithReload(false); err != nil {
+	token, err := rlstore.startReadingWithReload(false)
+	if err != nil {
 		return nil, err
 	}
-	defer rlstore.stopReading()
+	defer rlstore.stopReading(token)
 	lw, err := rlstore.lockfile.GetLastWrite()
 	if err != nil {
 		return nil, err
@@ -1114,24 +1170,6 @@ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (roL
 		return nil, err
 	}
 	return &rlstore, nil
-}
-
-// privateWithLayerReadToken obtains a layerReadToken and calls fn
-// DO NOT CALL THIS from outside of layerStore.
-// Almost all users should call layerReadAccess() instead.
-func (r *layerStore) privateWithLayerReadToken(fn func(token layerReadToken)) {
-	// TO DO: Actually make this safe against concurrent writers
-	token := layerReadToken{}
-	fn(token)
-}
-
-// privateWithLayerWriteToken obtains a layerWriteToken and calls fn
-// DO NOT CALL THIS from outside of layerStore.
-// Almost all users should call layerWriteAccess() instead.
-func (r *layerStore) privateWithLayerWriteToken(fn func(token layerWriteToken)) {
-	// TO DO: Actually make this safe against concurrent writers
-	token := layerWriteToken{}
-	fn(token)
 }
 
 // layerReadAccess ensures that it is safe to read the store, makes sure it is fresh, and calls fn().
@@ -1154,21 +1192,12 @@ func (r *layerStore) privateWithLayerWriteToken(fn func(token layerWriteToken)) 
 func layerReadAccess[T any](r roLayerStore, fn func(token layerReadToken) (T, bool, error)) (T, bool, error) {
 	var res T // A zero value of T
 
-	store, ok := r.(*layerStore)
-	if !ok {
-		return res, true, errors.New("internal error: roLayerStore is not a *layerStore")
-	}
-
-	if err := r.startReading(); err != nil {
+	token, err := r.startReading()
+	if err != nil {
 		return res, true, err
 	}
-	defer r.stopReading()
-	var done bool
-	var err error
-	store.privateWithLayerReadToken(func(token layerReadToken) {
-		res, done, err = fn(token)
-	})
-	return res, done, err
+	defer r.stopReading(token)
+	return fn(token)
 }
 
 // layerWriteAccess ensures that it is safe to write to store, makes sure it is fresh, and calls fn().
@@ -1178,20 +1207,12 @@ func layerReadAccess[T any](r roLayerStore, fn func(token layerReadToken) (T, bo
 // need a layerWriteToken can be called.
 // Callers MUST NOT save token and use it after layerReadAccess terminates.
 func layerWriteAccess(r rwLayerStore, fn func(token layerWriteToken) error) error {
-	store, ok := r.(*layerStore)
-	if !ok {
-		return errors.New("internal error: roLayerStore is not a *layerStore")
-	}
-
-	if err := r.startWriting(); err != nil {
+	token, err := r.startWriting()
+	if err != nil {
 		return err
 	}
-	defer r.stopWriting()
-	var err error
-	store.privateWithLayerWriteToken(func(token layerWriteToken) {
-		err = fn(token)
-	})
-	return err
+	defer r.stopWriting(token)
+	return fn(token)
 }
 
 // Requires startReading or startWriting.
@@ -1780,7 +1801,7 @@ func (r *layerStore) bigData(_ layerReadToken, id, key string) (io.ReadCloser, e
 // Deprecated: Use setBigData
 func (r *layerStore) SetBigData(id, key string, data io.Reader) error {
 	var err error
-	r.privateWithLayerWriteToken(func(token layerWriteToken) {
+	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
 		err = r.setBigData(token, id, key, data)
 	})
 	return err
@@ -1998,7 +2019,7 @@ func (r *layerStore) Delete(id string) error {
 // Deprecated: Use exists()
 func (r *layerStore) Exists(id string) bool {
 	var res bool
-	r.privateWithLayerReadToken(func(token layerReadToken) {
+	r.privateWithFakeLayerReadToken(func(token layerReadToken) {
 		res = r.exists(token, id)
 	})
 	return res

@@ -2169,7 +2169,7 @@ func (s *store) Names(id string) ([]string, error) {
 
 func (s *store) Lookup(name string) (string, error) {
 	if res, done, err := readAllLayerStores(s, func(store roLayerStore, token layerReadToken) (string, bool, error) {
-		if l, err := store.Get(name); l != nil && err == nil {
+		if l, err := store.get(token, name); l != nil && err == nil {
 			return l.ID, true, nil
 		}
 		return "", false, nil

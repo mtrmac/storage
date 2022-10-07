@@ -1358,6 +1358,7 @@ func (s *store) CreateImage(id string, names []string, layer, metadata string, o
 // - s.imageStore must be locked for writing; it might be identical to ristore.
 // - rlstore must be locked for writing
 // - lstores must all be locked for reading
+// FIXME: Convert this
 func (s *store) imageTopLayerForMapping(image *Image, ristore roImageStore, rlstore rwLayerStore, lstores []roLayerStore, options types.IDMappingOptions) (*Layer, error) {
 	layerMatchesMappingOptions := func(layer *Layer, options types.IDMappingOptions) bool {
 		// If the driver supports shifting and the layer has no mappings, we can use it.
@@ -1462,6 +1463,7 @@ func (s *store) imageTopLayerForMapping(image *Image, ristore roImageStore, rlst
 	return mappedLayer, nil
 }
 
+// FIXME: Convert this
 func (s *store) CreateContainer(id string, names []string, image, layer, metadata string, options *ContainerOptions) (*Container, error) {
 	if options == nil {
 		options = &ContainerOptions{}
@@ -1821,6 +1823,8 @@ func (s *store) ImageSize(id string) (int64, error) {
 	if err != nil {
 		return -1, err
 	}
+	// FIXME: This preventively locks all layer stores; requires a "lock & return an unlocker"
+	// API.
 	for _, s := range layerStores {
 		store := s
 		token, err := store.startReading()
@@ -1916,6 +1920,8 @@ func (s *store) ContainerSize(id string) (int64, error) {
 	if err != nil {
 		return -1, err
 	}
+	// FIXME: This preventively locks all layer stores; requires a "lock & return an unlocker"
+	// API.
 	for _, s := range layerStores {
 		store := s
 		token, err := store.startReading()
@@ -2897,7 +2903,7 @@ func (al *additionalLayer) PutAs(id, parent string, names []string) (*Layer, err
 				if err != nil {
 					return nil, err
 				}
-				defer lstore.stopReading(lToken)
+				defer lstore.stopReading(lToken) // FIXME: This requires unlock at end (?)
 			}
 			parentLayer, err = lstore.Get(parent)
 			if err == nil {

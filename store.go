@@ -1658,7 +1658,7 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 func (s *store) SetMetadata(id, metadata string) error {
 	return s.writeToAllStores(func(rlstore rwLayerStore, layerToken layerWriteToken) error {
 		if rlstore.exists(layerToken.readToken, id) {
-			return rlstore.SetMetadata(id, metadata)
+			return rlstore.setMetadata(layerToken, id, metadata)
 		}
 		if s.imageStore.Exists(id) {
 			return s.imageStore.SetMetadata(id, metadata)

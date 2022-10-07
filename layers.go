@@ -265,7 +265,6 @@ type roLayerStore interface {
 // all known layers.
 type rwLayerStore interface {
 	roLayerStore
-	rwMetadataStore
 	flaggableStore
 	rwLayerBigDataStore
 
@@ -275,6 +274,9 @@ type rwLayerStore interface {
 
 	// stopWriting releases locks obtained by startWriting.
 	stopWriting(layerWriteToken)
+
+	// setMetadata updates the metadata associated with the item with the specified ID.
+	setMetadata(token layerWriteToken, id, metadata string) error
 
 	// Create creates a new layer, optionally giving it a specified ID rather than
 	// a randomly-generated one, either inheriting data from another specified
@@ -1880,11 +1882,7 @@ func (r *layerStore) metadata(_ layerReadToken, id string) (string, error) {
 	return "", ErrLayerUnknown
 }
 
-// Requires startWriting.
-func (r *layerStore) SetMetadata(id, metadata string) error {
-	if !r.lockfile.IsReadWrite() {
-		return fmt.Errorf("not allowed to modify layer metadata at %q: %w", r.layerdir, ErrStoreIsReadOnly)
-	}
+func (r *layerStore) setMetadata(_ layerWriteToken, id, metadata string) error {
 	if layer, ok := r.lookup(id); ok {
 		layer.Metadata = metadata
 		return r.saveFor(layer)

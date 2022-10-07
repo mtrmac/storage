@@ -261,7 +261,11 @@ type roLayerStore interface {
 	LayersByUncompressedDigest(d digest.Digest) ([]Layer, error)
 
 	// Layers returns a slice of the known layers.
+	//
+	// Depreated: Use getLayers.
 	Layers() ([]Layer, error)
+	// getLayers returns a slice of the known layers.
+	getLayers(layerReadToken) ([]Layer, error)
 }
 
 // rwLayerStore wraps a graph driver, adding the ability to refer to layers by
@@ -304,7 +308,11 @@ type rwLayerStore interface {
 	updateNames(token layerWriteToken, id string, names []string, op updateNameOperation) error
 
 	// Delete deletes a layer with the specified name or ID.
+	//
+	// Deprecated: use delete()
 	Delete(id string) error
+	// Delete deletes a layer with the specified name or ID.
+	delete(token layerWriteToken, id string) error
 
 	// Wipe deletes all layers.
 	Wipe() error
@@ -741,7 +749,17 @@ func (r *layerStore) reloadMountsIfChanged() error {
 }
 
 // Requires startReading or startWriting.
+// Deprecated: Use layers()
 func (r *layerStore) Layers() ([]Layer, error) {
+	var res []Layer
+	var err error
+	r.privateWithFakeLayerReadToken(func(token layerReadToken) {
+		res, err = r.getLayers(token)
+	})
+	return res, err
+}
+
+func (r *layerStore) getLayers(_ layerReadToken) ([]Layer, error) {
 	layers := make([]Layer, len(r.layers))
 	for i := range r.layers {
 		layers[i] = *copyLayer(r.layers[i])
@@ -926,7 +944,10 @@ func (r *layerStore) load(lockedForWriting bool) (bool, error) {
 			}
 			if layerHasIncompleteFlag(layer) {
 				logrus.Warnf("Found incomplete layer %#v, deleting it", layer.ID)
-				err := r.deleteInternal(layer.ID)
+				var err error
+				r.privateWithFakeLayerWriteToken(func(token layerWriteToken) { // FIXME: This should not be necessary
+					err = r.deleteInternal(token, layer.ID)
+				})
 				if err != nil {
 					// Don't return the error immediately, because deleteInternal does not saveLayers();
 					// Even if deleting one incomplete layer fails, call saveLayers() so that other possible successfully
@@ -1355,7 +1376,7 @@ func (r *layerStore) Put(id string, parentLayer *Layer, names []string, mountLab
 	return layer, layerSize, err
 }
 
-func (r *layerStore) put(_ layerWriteToken, id string, parentLayer *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error) {
+func (r *layerStore) put(token layerWriteToken, id string, parentLayer *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error) {
 	if err := os.MkdirAll(r.rundir, 0700); err != nil {
 		return nil, -1, err
 	}
@@ -1463,7 +1484,7 @@ func (r *layerStore) put(_ layerWriteToken, id string, parentLayer *Layer, names
 		if !succeeded {
 			// On any error, try both removing the driver's data as well
 			// as the in-memory layer record.
-			if err2 := r.Delete(layer.ID); err2 != nil {
+			if err2 := r.delete(token, layer.ID); err2 != nil {
 				if cleanupFailureContext == "" {
 					cleanupFailureContext = "unknown: cleanupFailureContext not set at the failure site"
 				}
@@ -1561,6 +1582,7 @@ func (r *layerStore) Create(id string, parent *Layer, names []string, mountLabel
 }
 
 // Requires startReading or startWriting.
+// FIXME: Require layerWriteToken
 func (r *layerStore) Mounted(id string) (int, error) {
 	if !r.lockfile.IsReadWrite() {
 		return 0, fmt.Errorf("no mount information for layers at %q: %w", r.mountspath(), ErrStoreIsReadOnly)
@@ -1644,6 +1666,7 @@ func (r *layerStore) Mount(id string, options drivers.MountOpts) (string, error)
 }
 
 // Requires startWriting.
+// FIXME: Require layerWriteToken
 func (r *layerStore) unmount(id string, force bool, conditional bool) (bool, error) {
 	// LOCKING BUG: This is reachable via store.Diff → layerStore.Diff → layerStore.newFileGetter → simpleGetCloser.Close()
 	// (with btrfs and zfs graph drivers) holding layerStore only locked for reading, while it modifies
@@ -1910,11 +1933,7 @@ func layerHasIncompleteFlag(layer *Layer) bool {
 	return false
 }
 
-// Requires startWriting.
-func (r *layerStore) deleteInternal(id string) error {
-	if !r.lockfile.IsReadWrite() {
-		return fmt.Errorf("not allowed to delete layers at %q: %w", r.layerdir, ErrStoreIsReadOnly)
-	}
+func (r *layerStore) deleteInternal(token layerWriteToken, id string) error {
 	layer, ok := r.lookup(id)
 	if !ok {
 		return ErrLayerUnknown
@@ -1949,7 +1968,7 @@ func (r *layerStore) deleteInternal(id string) error {
 	if layer.MountPoint != "" {
 		delete(r.bymount, layer.MountPoint)
 	}
-	r.deleteInDigestMap(id)
+	r.deleteInDigestMap(token, id)
 	toDeleteIndex := -1
 	for i, candidate := range r.layers {
 		if candidate.ID == id {
@@ -1981,8 +2000,7 @@ func (r *layerStore) deleteInternal(id string) error {
 	return nil
 }
 
-// Requires startWriting.
-func (r *layerStore) deleteInDigestMap(id string) {
+func (r *layerStore) deleteInDigestMap(_ layerWriteToken, id string) {
 	for digest, layers := range r.bycompressedsum {
 		for i, layerID := range layers {
 			if layerID == id {
@@ -2003,9 +2021,16 @@ func (r *layerStore) deleteInDigestMap(id string) {
 	}
 }
 
-// Requires startWriting.
-// FIXME: Require layerWriteToken
+// Deprecated: Use delete()
 func (r *layerStore) Delete(id string) error {
+	var err error
+	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
+		err = r.delete(token, id)
+	})
+	return err
+}
+
+func (r *layerStore) delete(token layerWriteToken, id string) error {
 	layer, ok := r.lookup(id)
 	if !ok {
 		return ErrLayerUnknown
@@ -2023,7 +2048,7 @@ func (r *layerStore) Delete(id string) error {
 			return err
 		}
 	}
-	if err := r.deleteInternal(id); err != nil {
+	if err := r.deleteInternal(token, id); err != nil {
 		return err
 	}
 	return r.saveFor(layer)

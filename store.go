@@ -2203,7 +2203,7 @@ func (s *store) DeleteLayer(id string) error {
 			if l, err := rlstore.get(layerToken.readToken, id); err != nil {
 				id = l.ID
 			}
-			layers, err := rlstore.Layers()
+			layers, err := rlstore.getLayers(layerToken.readToken)
 			if err != nil {
 				return err
 			}
@@ -2231,7 +2231,7 @@ func (s *store) DeleteLayer(id string) error {
 					return fmt.Errorf("layer %v used by container %v: %w", id, container.ID, ErrLayerUsedByContainer)
 				}
 			}
-			if err := rlstore.Delete(id); err != nil {
+			if err := rlstore.delete(layerToken, id); err != nil {
 				return fmt.Errorf("delete layer %v: %w", id, err)
 			}
 

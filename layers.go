@@ -220,7 +220,11 @@ type roLayerStore interface {
 	exists(token layerReadToken, id string) bool
 
 	// Get retrieves information about a layer given an ID or name.
+	//
+	// Deprecated: Use get()
 	Get(id string) (*Layer, error)
+	// Get retrieves information about a layer given an ID or name.
+	get(token layerReadToken, id string) (*Layer, error)
 
 	// Status returns an slice of key-value pairs, suitable for human consumption,
 	// relaying whatever status information the underlying driver can share.
@@ -2040,9 +2044,17 @@ func (r *layerStore) exists(_ layerReadToken, id string) bool {
 	return ok
 }
 
-// Requires startReading or startWriting.
-// FIXME: Require layerReadToken
+// Deprecated: use get()
 func (r *layerStore) Get(id string) (*Layer, error) {
+	var res *Layer
+	var err error
+	r.privateWithFakeLayerReadToken(func(token layerReadToken) {
+		res, err = r.get(token, id)
+	})
+	return res, err
+}
+
+func (r *layerStore) get(_ layerReadToken, id string) (*Layer, error) {
 	if layer, ok := r.lookup(id); ok {
 		return copyLayer(layer), nil
 	}

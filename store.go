@@ -1251,9 +1251,12 @@ func (s *store) PutLayer(id, parent string, names []string, mountLabel string, w
 		gidMap := options.GIDMap
 		if parent != "" {
 			var ilayer *Layer
-			for _, l := range append([]roLayerStore{rlstore}, rlstores...) {
-				lstore := l
-				if lstore != rlstore {
+			if l, err := rlstore.get(token.readToken, parent); err == nil && l != nil {
+				ilayer = l
+				parent = ilayer.ID
+			} else {
+				for _, l := range rlstores {
+					lstore := l
 					// FIXME: This lstore needs(?) to be kept locked for the remainder of this function,
 					// not just for the Get.
 					lToken, err := lstore.startReading()
@@ -1261,11 +1264,11 @@ func (s *store) PutLayer(id, parent string, names []string, mountLabel string, w
 						return err
 					}
 					defer lstore.stopReading(lToken)
-				}
-				if l, err := lstore.Get(parent); err == nil && l != nil {
-					ilayer = l
-					parent = ilayer.ID
-					break
+					if l, err := lstore.Get(parent); err == nil && l != nil {
+						ilayer = l
+						parent = ilayer.ID
+						break
+					}
 				}
 			}
 			if ilayer == nil {
@@ -2137,7 +2140,7 @@ func (s *store) updateNames(id string, names []string, op updateNameOperation) e
 
 func (s *store) Names(id string) ([]string, error) {
 	if res, done, err := readAllLayerStores(s, func(store roLayerStore, token layerReadToken) ([]string, bool, error) {
-		if l, err := store.Get(id); l != nil && err == nil {
+		if l, err := store.get(token, id); l != nil && err == nil {
 			return l.Names, true, nil
 		}
 		return nil, false, nil
@@ -2197,7 +2200,7 @@ func (s *store) Lookup(name string) (string, error) {
 func (s *store) DeleteLayer(id string) error {
 	return s.writeToAllStores(func(rlstore rwLayerStore, layerToken layerWriteToken) error {
 		if rlstore.exists(layerToken.readToken, id) {
-			if l, err := rlstore.Get(id); err != nil {
+			if l, err := rlstore.get(layerToken.readToken, id); err != nil {
 				id = l.ID
 			}
 			layers, err := rlstore.Layers()
@@ -2305,7 +2308,7 @@ func (s *store) DeleteImage(id string, commit bool) (layers []string, err error)
 					break
 				}
 				parent := ""
-				if l, err := rlstore.Get(layer); err == nil {
+				if l, err := rlstore.get(layerToken.readToken, layer); err == nil {
 					parent = l.Parent
 				}
 				hasChildrenNotBeingRemoved := func() bool {

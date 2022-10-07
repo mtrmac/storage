@@ -2037,7 +2037,7 @@ func (s *store) SetContainerBigData(id, key string, data []byte) error {
 
 func (s *store) Exists(id string) bool {
 	if res, done, _ := readAllLayerStores(s, func(store roLayerStore, token layerReadToken) (bool, bool, error) {
-		if store.Exists(id) {
+		if store.exists(token, id) {
 			return true, true, nil
 		}
 		return false, false, nil

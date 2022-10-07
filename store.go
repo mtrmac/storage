@@ -1231,85 +1231,90 @@ func (s *store) PutLayer(id, parent string, names []string, mountLabel string, w
 	if err != nil {
 		return nil, -1, err
 	}
-	layerToken, err := rlstore.startWriting()
-	if err != nil {
-		return nil, -1, err
-	}
-	defer rlstore.stopWriting(layerToken)
-	if err := s.containerStore.startWriting(); err != nil {
-		return nil, -1, err
-	}
-	defer s.containerStore.stopWriting()
-	if options == nil {
-		options = &LayerOptions{}
-	}
-	if options.HostUIDMapping {
-		options.UIDMap = nil
-	}
-	if options.HostGIDMapping {
-		options.GIDMap = nil
-	}
-	uidMap := options.UIDMap
-	gidMap := options.GIDMap
-	if parent != "" {
-		var ilayer *Layer
-		for _, l := range append([]roLayerStore{rlstore}, rlstores...) {
-			lstore := l
-			if lstore != rlstore {
-				lToken, err := lstore.startReading()
-				if err != nil {
-					return nil, -1, err
+	var retLayer *Layer
+	var retLayerSize int64
+	if err := layerWriteAccess(rlstore, func(token layerWriteToken) error {
+		if err := s.containerStore.startWriting(); err != nil {
+			return err
+		}
+		defer s.containerStore.stopWriting()
+		if options == nil {
+			options = &LayerOptions{}
+		}
+		if options.HostUIDMapping {
+			options.UIDMap = nil
+		}
+		if options.HostGIDMapping {
+			options.GIDMap = nil
+		}
+		uidMap := options.UIDMap
+		gidMap := options.GIDMap
+		if parent != "" {
+			var ilayer *Layer
+			for _, l := range append([]roLayerStore{rlstore}, rlstores...) {
+				lstore := l
+				if lstore != rlstore {
+					// FIXME: This lstore needs(?) to be kept locked for the remainder of this function,
+					// not just for the Get.
+					lToken, err := lstore.startReading()
+					if err != nil {
+						return err
+					}
+					defer lstore.stopReading(lToken)
 				}
-				defer lstore.stopReading(lToken)
+				if l, err := lstore.Get(parent); err == nil && l != nil {
+					ilayer = l
+					parent = ilayer.ID
+					break
+				}
 			}
-			if l, err := lstore.Get(parent); err == nil && l != nil {
-				ilayer = l
-				parent = ilayer.ID
-				break
+			if ilayer == nil {
+				return ErrLayerUnknown
+			}
+			parentLayer = ilayer
+			containers, err := s.containerStore.Containers()
+			if err != nil {
+				return err
+			}
+			for _, container := range containers {
+				if container.LayerID == parent {
+					return ErrParentIsContainer
+				}
+			}
+			if !options.HostUIDMapping && len(options.UIDMap) == 0 {
+				uidMap = ilayer.UIDMap
+			}
+			if !options.HostGIDMapping && len(options.GIDMap) == 0 {
+				gidMap = ilayer.GIDMap
+			}
+		} else {
+			if !options.HostUIDMapping && len(options.UIDMap) == 0 {
+				uidMap = s.uidMap
+			}
+			if !options.HostGIDMapping && len(options.GIDMap) == 0 {
+				gidMap = s.gidMap
 			}
 		}
-		if ilayer == nil {
-			return nil, -1, ErrLayerUnknown
+		layerOptions := LayerOptions{
+			OriginalDigest:     options.OriginalDigest,
+			UncompressedDigest: options.UncompressedDigest,
 		}
-		parentLayer = ilayer
-		containers, err := s.containerStore.Containers()
-		if err != nil {
-			return nil, -1, err
-		}
-		for _, container := range containers {
-			if container.LayerID == parent {
-				return nil, -1, ErrParentIsContainer
+		if canUseShifting(rlstore, uidMap, gidMap) {
+			layerOptions.IDMappingOptions = types.IDMappingOptions{HostUIDMapping: true, HostGIDMapping: true, UIDMap: nil, GIDMap: nil}
+		} else {
+			layerOptions.IDMappingOptions = types.IDMappingOptions{
+				HostUIDMapping: options.HostUIDMapping,
+				HostGIDMapping: options.HostGIDMapping,
+				UIDMap:         copyIDMap(uidMap),
+				GIDMap:         copyIDMap(gidMap),
 			}
 		}
-		if !options.HostUIDMapping && len(options.UIDMap) == 0 {
-			uidMap = ilayer.UIDMap
-		}
-		if !options.HostGIDMapping && len(options.GIDMap) == 0 {
-			gidMap = ilayer.GIDMap
-		}
-	} else {
-		if !options.HostUIDMapping && len(options.UIDMap) == 0 {
-			uidMap = s.uidMap
-		}
-		if !options.HostGIDMapping && len(options.GIDMap) == 0 {
-			gidMap = s.gidMap
-		}
+		retLayer, retLayerSize, err = rlstore.put(token, id, parentLayer, names, mountLabel, nil, &layerOptions, writeable, nil, diff)
+		return err
+	}); err != nil {
+		return nil, -1, err
 	}
-	layerOptions := LayerOptions{
-		OriginalDigest:     options.OriginalDigest,
-		UncompressedDigest: options.UncompressedDigest,
-	}
-	if canUseShifting(rlstore, uidMap, gidMap) {
-		layerOptions.IDMappingOptions = types.IDMappingOptions{HostUIDMapping: true, HostGIDMapping: true, UIDMap: nil, GIDMap: nil}
-	} else {
-		layerOptions.IDMappingOptions = types.IDMappingOptions{
-			HostUIDMapping: options.HostUIDMapping,
-			HostGIDMapping: options.HostGIDMapping,
-			UIDMap:         copyIDMap(uidMap),
-			GIDMap:         copyIDMap(gidMap),
-		}
-	}
-	return rlstore.Put(id, parentLayer, names, mountLabel, nil, &layerOptions, writeable, nil, diff)
+	return retLayer, retLayerSize, nil
 }
 
 func (s *store) CreateLayer(id, parent string, names []string, mountLabel string, writeable bool, options *LayerOptions) (*Layer, error) {

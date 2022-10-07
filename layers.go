@@ -289,7 +289,10 @@ type rwLayerStore interface {
 	CreateWithFlags(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}) (layer *Layer, err error)
 
 	// Put combines the functions of CreateWithFlags and ApplyDiff.
+	// Deprecated: Use put, or almost always higher-level interfaces.
 	Put(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error)
+	// put combines the functions of CreateWithFlags and ApplyDiff.
+	put(token layerWriteToken, id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error)
 
 	// updateNames modifies names associated with a layer based on (op, names).
 	updateNames(token layerWriteToken, id string, names []string, op updateNameOperation) error
@@ -1335,10 +1338,18 @@ func (r *layerStore) PutAdditionalLayer(id string, parentLayer *Layer, names []s
 }
 
 // Requires startWriting.
+// Deprecated: Use put
 func (r *layerStore) Put(id string, parentLayer *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error) {
-	if !r.lockfile.IsReadWrite() {
-		return nil, -1, fmt.Errorf("not allowed to create new layers at %q: %w", r.layerdir, ErrStoreIsReadOnly)
-	}
+	var layer *Layer
+	var layerSize int64
+	var err error
+	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
+		layer, layerSize, err = r.put(token, id, parentLayer, names, mountLabel, options, moreOptions, writeable, flags, diff)
+	})
+	return layer, layerSize, err
+}
+
+func (r *layerStore) put(_ layerWriteToken, id string, parentLayer *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error) {
 	if err := os.MkdirAll(r.rundir, 0700); err != nil {
 		return nil, -1, err
 	}
@@ -1991,6 +2002,7 @@ func (r *layerStore) deleteInDigestMap(id string) {
 }
 
 // Requires startWriting.
+// FIXME: Require layerWriteToken
 func (r *layerStore) Delete(id string) error {
 	layer, ok := r.lookup(id)
 	if !ok {
@@ -2031,6 +2043,7 @@ func (r *layerStore) exists(_ layerReadToken, id string) bool {
 }
 
 // Requires startReading or startWriting.
+// FIXME: Require layerReadToken
 func (r *layerStore) Get(id string) (*Layer, error) {
 	if layer, ok := r.lookup(id); ok {
 		return copyLayer(layer), nil
@@ -2315,6 +2328,7 @@ func (r *layerStore) ApplyDiff(to string, diff io.Reader) (size int64, err error
 }
 
 // Requires startWriting.
+// FIXME: Require layerWriteToken
 func (r *layerStore) applyDiffWithOptions(to string, layerOptions *LayerOptions, diff io.Reader) (size int64, err error) {
 	if !r.lockfile.IsReadWrite() {
 		return -1, fmt.Errorf("not allowed to modify layer contents at %q: %w", r.layerdir, ErrStoreIsReadOnly)

@@ -2272,7 +2272,7 @@ func (s *store) DeleteImage(id string, commit bool) (layers []string, err error)
 			if err != nil {
 				return err
 			}
-			layers, err := rlstore.Layers()
+			layers, err := rlstore.getLayers(layerToken.readToken)
 			if err != nil {
 				return err
 			}
@@ -2340,7 +2340,7 @@ func (s *store) DeleteImage(id string, commit bool) (layers []string, err error)
 		}
 		if commit {
 			for _, layer := range layersToRemove {
-				if err = rlstore.Delete(layer); err != nil {
+				if err = rlstore.delete(layerToken, layer); err != nil {
 					return err
 				}
 			}

@@ -341,8 +341,8 @@ type rwLayerStore interface {
 	// to the caller, so it can be used for heuristic sanity checks at best. It should almost always be ignored.
 	unmount(id string, force bool, conditional bool) (bool, error)
 
-	// Mounted returns number of times the layer has been mounted.
-	Mounted(id string) (int, error)
+	// mounted returns number of times the layer has been mounted.
+	mounted(token layerReadToken, id string) (int, error)
 
 	// ParentOwners returns the UIDs and GIDs of parents of the layer's mountpoint
 	// for which the layer's UID and GID maps don't contain corresponding entries.
@@ -1590,9 +1590,10 @@ func (r *layerStore) Create(id string, parent *Layer, names []string, mountLabel
 	return r.CreateWithFlags(id, parent, names, mountLabel, options, moreOptions, writeable, nil)
 }
 
-// Requires startReading or startWriting.
-// FIXME: Require layerWriteToken
-func (r *layerStore) Mounted(id string) (int, error) {
+func (r *layerStore) mounted(token layerReadToken, id string) (int, error) {
+	// This IsReadWrite check is NOT replaced by relying on token; it really means
+	// “is this the primary store”. Even callers of the primary store are going to only
+	// hold the read token.
 	if !r.lockfile.IsReadWrite() {
 		return 0, fmt.Errorf("no mount information for layers at %q: %w", r.mountspath(), ErrStoreIsReadOnly)
 	}

@@ -2560,13 +2560,11 @@ func (s *store) Mounted(id string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	token, err := rlstore.startReading()
-	if err != nil {
-		return 0, err
-	}
-	defer rlstore.stopReading(token)
-
-	return rlstore.Mounted(id)
+	res, _, err := layerReadAccess(rlstore, func(token layerReadToken) (int, bool, error) {
+		mounted, err := rlstore.mounted(token, id)
+		return mounted, true, err
+	})
+	return res, err
 }
 
 func (s *store) UnmountImage(id string, force bool) (bool, error) {

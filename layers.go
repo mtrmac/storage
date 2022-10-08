@@ -212,10 +212,6 @@ type roLayerStore interface {
 	// metadata reads metadata associated with an item with the specified ID.
 	metadata(token layerReadToken, id string) (string, error)
 
-	// Exists checks if a layer with the specified name or ID is known.
-	//
-	// Deprecated: Use exists().
-	Exists(id string) bool
 	// exists checks if a layer with the specified name or ID is known.
 	exists(token layerReadToken, id string) bool
 
@@ -241,7 +237,7 @@ type roLayerStore interface {
 	// By default, the parent of the second layer is used as the first
 	// layer, so it need not be specified.  Options can be used to override
 	// default behavior, but are also not required.
-	Diff(from, to string, options *DiffOptions) (io.ReadCloser, error)
+	diff(token layerReadToken, from, to string, options *DiffOptions) (io.ReadCloser, error)
 
 	// DiffSize produces an estimate of the length of the tarstream which would be
 	// produced by Diff.
@@ -2063,16 +2059,6 @@ func (r *layerStore) delete(token layerWriteToken, id string) error {
 	return r.saveFor(layer)
 }
 
-// Requires startReading or startWriting.
-// Deprecated: Use exists()
-func (r *layerStore) Exists(id string) bool {
-	var res bool
-	r.privateWithFakeLayerReadToken(func(token layerReadToken) {
-		res = r.exists(token, id)
-	})
-	return res
-}
-
 func (r *layerStore) exists(_ layerReadToken, id string) bool {
 	_, ok := r.lookup(id)
 	return ok
@@ -2111,9 +2097,7 @@ func (r *layerStore) wipe(token layerWriteToken) error {
 	return nil
 }
 
-// Requires startReading or startWriting.
-// FIXME: Require layerReadToken
-func (r *layerStore) findParentAndLayer(from, to string) (fromID string, toID string, fromLayer, toLayer *Layer, err error) {
+func (r *layerStore) findParentAndLayer(token layerReadToken, from, to string) (fromID string, toID string, fromLayer, toLayer *Layer, err error) {
 	var ok bool
 	toLayer, ok = r.lookup(to)
 	if !ok {
@@ -2146,7 +2130,7 @@ func (r *layerStore) layerMappings(layer *Layer) *idtools.IDMappings {
 }
 
 func (r *layerStore) changes(token layerReadToken, from, to string) ([]archive.Change, error) {
-	from, to, fromLayer, toLayer, err := r.findParentAndLayer(from, to)
+	from, to, fromLayer, toLayer, err := r.findParentAndLayer(token, from, to)
 	if err != nil {
 		return nil, ErrLayerUnknown
 	}
@@ -2154,9 +2138,10 @@ func (r *layerStore) changes(token layerReadToken, from, to string) ([]archive.C
 }
 
 type simpleGetCloser struct {
-	r    *layerStore
-	path string
-	id   string
+	r     *layerStore
+	token layerReadToken
+	path  string
+	id    string
 }
 
 func (s *simpleGetCloser) Get(path string) (io.ReadCloser, error) {
@@ -2165,18 +2150,15 @@ func (s *simpleGetCloser) Get(path string) (io.ReadCloser, error) {
 
 // LOCKING BUG: See the comments in layerStore.Diff
 func (s *simpleGetCloser) Close() error {
-	// FIXME FIXME: This needs a token - a read-only one only??
-	_, err := s.r.Unmount(s.id, false, false)
+	_, err := s.r.unmount(s.token, nil, s.id, false, false)
 	return err
 }
 
-// LOCKING BUG: See the comments in layerStore.Diff
-func (r *layerStore) newFileGetter(id string) (drivers.FileGetCloser, error) {
+func (r *layerStore) newFileGetter(token layerReadToken, id string) (drivers.FileGetCloser, error) {
 	if getter, ok := r.driver.(drivers.DiffGetterDriver); ok {
 		return getter.DiffGetter(id)
 	}
-	// FIXME FIXME: This needs a token - a read-only one only??
-	path, err := r.Mount(id, drivers.MountOpts{})
+	path, err := r.mount(token, nil, id, drivers.MountOpts{})
 	if err != nil {
 		return nil, err
 	}
@@ -2205,11 +2187,10 @@ func writeCompressedDataGoroutine(pwriter *io.PipeWriter, compressor io.WriteClo
 	err = writeCompressedData(compressor, source)
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) Diff(from, to string, options *DiffOptions) (io.ReadCloser, error) {
+func (r *layerStore) diff(token layerReadToken, from, to string, options *DiffOptions) (io.ReadCloser, error) {
 	var metadata storage.Unpacker
 
-	from, to, fromLayer, toLayer, err := r.findParentAndLayer(from, to)
+	from, to, fromLayer, toLayer, err := r.findParentAndLayer(token, from, to)
 	if err != nil {
 		return nil, ErrLayerUnknown
 	}
@@ -2317,9 +2298,7 @@ func (r *layerStore) Diff(from, to string, options *DiffOptions) (io.ReadCloser,
 
 	metadata = storage.NewJSONUnpacker(decompressor)
 
-	// LOCKING BUG: With btrfs and zfs graph drivers), this uses r.Mount() and r.unmount() holding layerStore only locked for reading
-	// but they modify in-memory state.
-	fgetter, err := r.newFileGetter(to)
+	fgetter, err := r.newFileGetter(token, to)
 	if err != nil {
 		errs := multierror.Append(nil, fmt.Errorf("creating file-getter: %w", err))
 		if err := decompressor.Close(); err != nil {
@@ -2356,7 +2335,7 @@ func (r *layerStore) Diff(from, to string, options *DiffOptions) (io.ReadCloser,
 
 func (r *layerStore) diffSize(token layerReadToken, from, to string) (size int64, err error) {
 	var fromLayer, toLayer *Layer
-	from, to, fromLayer, toLayer, err = r.findParentAndLayer(from, to)
+	from, to, fromLayer, toLayer, err = r.findParentAndLayer(token, from, to)
 	if err != nil {
 		return -1, ErrLayerUnknown
 	}

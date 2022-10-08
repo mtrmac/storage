@@ -2648,8 +2648,8 @@ func (s *store) Diff(from, to string, options *DiffOptions) (io.ReadCloser, erro
 		if err != nil {
 			return nil, err
 		}
-		if store.Exists(to) {
-			rc, err := store.Diff(from, to, options)
+		if store.exists(token, to) {
+			rc, err := store.diff(token, from, to, options)
 			if rc != nil && err == nil {
 				wrapped := ioutils.NewReadCloserWrapper(rc, func() error {
 					err := rc.Close()

@@ -2581,7 +2581,7 @@ func (s *store) Unmount(id string, force bool) (bool, error) {
 	}
 	return writeToLayerStore(s, func(rlstore rwLayerStore, token layerWriteToken) (bool, error) {
 		if rlstore.exists(token.readToken, id) {
-			return rlstore.unmount(id, force, false)
+			return rlstore.unmount(token.readToken, &token, id, force, false)
 		}
 		return false, ErrLayerUnknown
 	})
@@ -3133,7 +3133,7 @@ func (s *store) Shutdown(force bool) ([]string, error) {
 		mounted = append(mounted, layer.ID)
 		if force {
 			for {
-				_, err2 := rlstore.unmount(layer.ID, force, true)
+				_, err2 := rlstore.unmount(layerToken.readToken, &layerToken, layer.ID, force, true)
 				if err2 == ErrLayerNotMounted {
 					break
 				}

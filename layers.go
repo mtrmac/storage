@@ -331,7 +331,12 @@ type rwLayerStore interface {
 	// writeToken is optional, and can be nil instead.
 	mount(readToken layerReadToken, writeToken *layerWriteToken, id string, options drivers.MountOpts) (string, error)
 
+	// Unmount unmounts a layer when it is no longer in use.
+	//
+	// Deprecated: Use unmount()
+	Unmount(id string, force bool, conditional bool) (bool, error)
 	// unmount unmounts a layer when it is no longer in use.
+	// writeToken is optional, and can be nil instead.
 	// If conditional is set, it will fail with ErrLayerNotMounted if the layer is not mounted (without conditional, the caller is
 	// making a promise that the layer is actually mounted).
 	// If force is set, it will physically try to unmount it even if it is mounted multple times, or even if (!conditional and)
@@ -339,7 +344,7 @@ type rwLayerStore interface {
 	// It returns whether the layer was still mounted at the time this function returned.
 	// WARNING: The return value may already be obsolete by the time it is available
 	// to the caller, so it can be used for heuristic sanity checks at best. It should almost always be ignored.
-	unmount(id string, force bool, conditional bool) (bool, error)
+	unmount(readToken layerReadToken, writeToken *layerWriteToken, id string, force bool, conditional bool) (bool, error)
 
 	// mounted returns number of times the layer has been mounted.
 	mounted(token layerReadToken, id string) (int, error)
@@ -1684,15 +1689,24 @@ func (r *layerStore) mount(readToken layerReadToken, writeToken *layerWriteToken
 	return mountpoint, err
 }
 
-// Requires startWriting.
-// FIXME: Require layerWriteToken
-func (r *layerStore) unmount(id string, force bool, conditional bool) (bool, error) {
+// Deprecated: Use unmount
+func (r *layerStore) Unmount(id string, force bool, conditional bool) (bool, error) {
+	var stillMounted bool
+	var err error
+	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
+		stillMounted, err = r.unmount(token.readToken, &token, id, force, conditional)
+	})
+	return stillMounted, err
+}
+
+func (r *layerStore) unmount(readToken layerReadToken, writeToken *layerWriteToken, id string, force bool, conditional bool) (bool, error) {
 	// LOCKING BUG: This is reachable via store.Diff → layerStore.Diff → layerStore.newFileGetter → simpleGetCloser.Close()
 	// (with btrfs and zfs graph drivers) holding layerStore only locked for reading, while it modifies
 	// - r.layers[].MountCount (directly and via loadMounts / saveMounts)
 	// - r.layers[].MountPoint (directly and via loadMounts / saveMounts)
 	// - r.bymount (via loadMounts / saveMounts)
 
+	// FIXME: How does this work with the check in mount()? Is that never reached???
 	if !r.lockfile.IsReadWrite() {
 		return false, fmt.Errorf("not allowed to update mount locations for layers at %q: %w", r.mountspath(), ErrStoreIsReadOnly)
 	}
@@ -1712,6 +1726,7 @@ func (r *layerStore) unmount(id string, force bool, conditional bool) (bool, err
 	if conditional && layer.MountCount == 0 {
 		return false, ErrLayerNotMounted
 	}
+	// FIXME: Why don’t the MountCount changes require an exclusive lock?? See LOCKING BUG abve.
 	if force {
 		layer.MountCount = 1
 	}
@@ -2059,7 +2074,7 @@ func (r *layerStore) delete(token layerWriteToken, id string) error {
 	// should try to clean that up before we start deleting anything at the
 	// driver level.
 	for {
-		_, err := r.unmount(id, false, true)
+		_, err := r.unmount(token.readToken, &token, id, false, true)
 		if err == ErrLayerNotMounted {
 			break
 		}
@@ -2175,7 +2190,8 @@ func (s *simpleGetCloser) Get(path string) (io.ReadCloser, error) {
 
 // LOCKING BUG: See the comments in layerStore.Diff
 func (s *simpleGetCloser) Close() error {
-	_, err := s.r.unmount(s.id, false, false)
+	// FIXME FIXME: This needs a token - a read-only one only??
+	_, err := s.r.Unmount(s.id, false, false)
 	return err
 }
 

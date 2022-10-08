@@ -1827,19 +1827,26 @@ func (s *store) SetImageBigData(id, key string, data []byte, digestManifest func
 }
 
 func (s *store) ImageSize(id string) (int64, error) {
-	layerStores, err := s.allLayerStores()
+	unlockedLayerStores, err := s.allLayerStores()
 	if err != nil {
 		return -1, err
 	}
-	// FIXME: This preventively locks all layer stores; requires a "lock & return an unlocker"
-	// API.
-	for _, s := range layerStores {
+	type lockedLayerStore struct {
+		store roLayerStore
+		token layerReadToken
+	}
+	lockedLayerStores := make([]lockedLayerStore, 0, len(unlockedLayerStores))
+	for _, s := range unlockedLayerStores {
 		store := s
 		token, err := store.startReading()
 		if err != nil {
 			return -1, err
 		}
 		defer store.stopReading(token)
+		lockedLayerStores = append(lockedLayerStores, lockedLayerStore{
+			store: store,
+			token: token,
+		})
 	}
 
 	// Look for the image's record.
@@ -1878,10 +1885,10 @@ func (s *store) ImageSize(id string) (int64, error) {
 			}
 			visited[layerID] = struct{}{}
 			// Look for the layer and the store that knows about it.
-			var layerStore roLayerStore
+			var layerStore lockedLayerStore
 			var layer *Layer
-			for _, store := range layerStores {
-				if layer, err = store.Get(layerID); err == nil {
+			for _, store := range lockedLayerStores {
+				if layer, err = store.store.get(store.token, layerID); err == nil {
 					layerStore = store
 					break
 				}
@@ -1893,7 +1900,7 @@ func (s *store) ImageSize(id string) (int64, error) {
 			n := layer.UncompressedSize
 			if layer.UncompressedDigest == "" {
 				// Compute the size.
-				n, err = layerStore.DiffSize("", layer.ID)
+				n, err = layerStore.store.diffSize(layerStore.token, "", layer.ID)
 				if err != nil {
 					return -1, fmt.Errorf("size/digest of layer with ID %q could not be calculated: %w", layerID, err)
 				}

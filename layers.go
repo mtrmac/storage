@@ -265,10 +265,6 @@ type roLayerStore interface {
 	// specified uncompressed digest value recorded for them.
 	LayersByUncompressedDigest(d digest.Digest) ([]Layer, error)
 
-	// Layers returns a slice of the known layers.
-	//
-	// Depreated: Use getLayers.
-	Layers() ([]Layer, error)
 	// getLayers returns a slice of the known layers.
 	getLayers(layerReadToken) ([]Layer, error)
 }
@@ -764,17 +760,6 @@ func (r *layerStore) reloadMountsIfChanged() error {
 		r.mountsLastWrite = lastWrite
 	}
 	return nil
-}
-
-// Requires startReading or startWriting.
-// Deprecated: Use layers()
-func (r *layerStore) Layers() ([]Layer, error) {
-	var res []Layer
-	var err error
-	r.privateWithFakeLayerReadToken(func(token layerReadToken) {
-		res, err = r.getLayers(token)
-	})
-	return res, err
 }
 
 func (r *layerStore) getLayers(_ layerReadToken) ([]Layer, error) {
@@ -1873,16 +1858,6 @@ func (r *layerStore) bigData(_ layerReadToken, id, key string) (io.ReadCloser, e
 		return nil, fmt.Errorf("locating layer with ID %q: %w", id, ErrLayerUnknown)
 	}
 	return os.Open(r.datapath(layer.ID, key))
-}
-
-// Requires startWriting.
-// Deprecated: Use setBigData
-func (r *layerStore) SetBigData(id, key string, data io.Reader) error {
-	var err error
-	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
-		err = r.setBigData(token, id, key, data)
-	})
-	return err
 }
 
 func (r *layerStore) setBigData(token layerWriteToken, id, key string, data io.Reader) error {

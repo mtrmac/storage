@@ -3118,52 +3118,49 @@ func (s *store) Shutdown(force bool) ([]string, error) {
 	if err != nil {
 		return mounted, err
 	}
-	layerToken, err := rlstore.startWriting()
-	if err != nil {
-		return nil, err
-	}
-	defer rlstore.stopWriting(layerToken)
-
-	layers, err := rlstore.Layers()
-	if err != nil {
-		return mounted, err
-	}
-	for _, layer := range layers {
-		if layer.MountCount == 0 {
-			continue
+	err = layerWriteAccess(rlstore, func(layerToken layerWriteToken) error {
+		layers, err := rlstore.getLayers(layerToken.readToken)
+		if err != nil {
+			return err
 		}
-		mounted = append(mounted, layer.ID)
-		if force {
-			for {
-				_, err2 := rlstore.unmount(layerToken.readToken, &layerToken, layer.ID, force, true)
-				if err2 == ErrLayerNotMounted {
-					break
-				}
-				if err2 != nil {
-					if err == nil {
-						err = err2
+		for _, layer := range layers {
+			if layer.MountCount == 0 {
+				continue
+			}
+			mounted = append(mounted, layer.ID)
+			if force {
+				for {
+					_, err2 := rlstore.unmount(layerToken.readToken, &layerToken, layer.ID, force, true)
+					if err2 == ErrLayerNotMounted {
+						break
 					}
-					break
+					if err2 != nil {
+						if err == nil {
+							err = err2
+						}
+						break
+					}
 				}
 			}
 		}
-	}
-	if len(mounted) > 0 && err == nil {
-		err = fmt.Errorf("a layer is mounted: %w", ErrLayerUsedByContainer)
-	}
-	if err == nil {
-		err = s.graphDriver.Cleanup()
-		// We don’t retain the lastWrite value, and treat this update as if someone else did the .Cleanup(),
-		// so that we reload after a .Shutdown() the same way other processes would.
-		// Shutdown() is basically an error path, so reliability is more important than performance.
-		if _, err2 := s.graphLock.RecordWrite(); err2 != nil {
-			if err == nil {
-				err = err2
-			} else {
-				err = fmt.Errorf("(graphLock.RecordWrite failed: %v) %w", err2, err)
+		if len(mounted) > 0 && err == nil {
+			err = fmt.Errorf("a layer is mounted: %w", ErrLayerUsedByContainer)
+		}
+		if err == nil {
+			err = s.graphDriver.Cleanup()
+			// We don’t retain the lastWrite value, and treat this update as if someone else did the .Cleanup(),
+			// so that we reload after a .Shutdown() the same way other processes would.
+			// Shutdown() is basically an error path, so reliability is more important than performance.
+			if _, err2 := s.graphLock.RecordWrite(); err2 != nil {
+				if err == nil {
+					err = err2
+				} else {
+					err = fmt.Errorf("(graphLock.RecordWrite failed: %v) %w", err2, err)
+				}
 			}
 		}
-	}
+		return err
+	})
 	return mounted, err
 }
 

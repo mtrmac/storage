@@ -2795,7 +2795,7 @@ func (s *store) ContainerParentOwners(id string) ([]int, []int, error) {
 func (s *store) Layers() ([]Layer, error) {
 	var layers []Layer
 	if _, done, err := readAllLayerStores(s, func(store roLayerStore, token layerReadToken) (void, bool, error) {
-		storeLayers, err := store.Layers()
+		storeLayers, err := store.getLayers(token)
 		if err != nil {
 			return void{}, true, err
 		}

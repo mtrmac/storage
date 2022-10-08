@@ -230,11 +230,11 @@ type roLayerStore interface {
 	// relaying whatever status information the underlying driver can share.
 	Status() ([][2]string, error)
 
-	// Changes returns a slice of Change structures, which contain a pathname
+	// changes returns a slice of Change structures, which contain a pathname
 	// (Path) and a description of what sort of change (Kind) was made by the
 	// layer (either ChangeModify, ChangeAdd, or ChangeDelete), relative to a
 	// specified layer.  By default, the layer's parent is used as a reference.
-	Changes(from, to string) ([]archive.Change, error)
+	changes(token layerReadToken, from, to string) ([]archive.Change, error)
 
 	// Diff produces a tarstream which can be applied to a layer with the contents
 	// of the first layer to produce a layer with the contents of the second layer.
@@ -2137,6 +2137,7 @@ func (r *layerStore) wipe(token layerWriteToken) error {
 }
 
 // Requires startReading or startWriting.
+// FIXME: Require layerReadToken
 func (r *layerStore) findParentAndLayer(from, to string) (fromID string, toID string, fromLayer, toLayer *Layer, err error) {
 	var ok bool
 	toLayer, ok = r.lookup(to)
@@ -2169,8 +2170,7 @@ func (r *layerStore) layerMappings(layer *Layer) *idtools.IDMappings {
 	return idtools.NewIDMappingsFromMaps(layer.UIDMap, layer.GIDMap)
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) Changes(from, to string) ([]archive.Change, error) {
+func (r *layerStore) changes(token layerReadToken, from, to string) ([]archive.Change, error) {
 	from, to, fromLayer, toLayer, err := r.findParentAndLayer(from, to)
 	if err != nil {
 		return nil, ErrLayerUnknown

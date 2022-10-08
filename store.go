@@ -2589,8 +2589,8 @@ func (s *store) Unmount(id string, force bool) (bool, error) {
 
 func (s *store) Changes(from, to string) ([]archive.Change, error) {
 	if res, done, err := readAllLayerStores(s, func(store roLayerStore, token layerReadToken) ([]archive.Change, bool, error) {
-		if store.Exists(to) {
-			res, err := store.Changes(from, to)
+		if store.exists(token, to) {
+			res, err := store.changes(token, from, to)
 			return res, true, err
 		}
 		return nil, false, nil

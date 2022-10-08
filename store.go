@@ -2677,7 +2677,7 @@ func (s *store) ApplyDiffWithDiffer(to string, options *drivers.ApplyDiffOpts, d
 		if to != "" && !rlstore.exists(token.readToken, to) {
 			return nil, ErrLayerUnknown
 		}
-		return rlstore.ApplyDiffWithDiffer(to, options, differ)
+		return rlstore.applyDiffWithDiffer(token, to, options, differ)
 	})
 }
 

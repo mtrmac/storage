@@ -362,9 +362,9 @@ type rwLayerStore interface {
 	// applies its changes to a specified layer.
 	ApplyDiff(to string, diff io.Reader) (int64, error)
 
-	// ApplyDiffWithDiffer applies the changes through the differ callback function.
+	// applyDiffWithDiffer applies the changes through the differ callback function.
 	// If to is the empty string, then a staging directory is created by the driver.
-	ApplyDiffWithDiffer(to string, options *drivers.ApplyDiffOpts, differ drivers.Differ) (*drivers.DriverWithDifferOutput, error)
+	applyDiffWithDiffer(token layerWriteToken, to string, options *drivers.ApplyDiffOpts, differ drivers.Differ) (*drivers.DriverWithDifferOutput, error)
 
 	// cleanupStagingDirectory cleanups the staging directory.  It can be used to cleanup the staging directory on errors
 	cleanupStagingDirectory(token layerWriteToken, stagingDirectory string) error
@@ -2608,8 +2608,7 @@ func (r *layerStore) applyDiffFromStagingDirectory(token layerWriteToken, id, st
 	return err
 }
 
-// Requires startWriting.
-func (r *layerStore) ApplyDiffWithDiffer(to string, options *drivers.ApplyDiffOpts, differ drivers.Differ) (*drivers.DriverWithDifferOutput, error) {
+func (r *layerStore) applyDiffWithDiffer(token layerWriteToken, to string, options *drivers.ApplyDiffOpts, differ drivers.Differ) (*drivers.DriverWithDifferOutput, error) {
 	ddriver, ok := r.driver.(drivers.DriverWithDiffer)
 	if !ok {
 		return nil, ErrNotSupported

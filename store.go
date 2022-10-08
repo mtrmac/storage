@@ -2667,7 +2667,7 @@ func (s *store) ApplyDiffFromStagingDirectory(to, stagingDirectory string, diffO
 
 func (s *store) CleanupStagingDirectory(stagingDirectory string) error {
 	_, err := writeToLayerStore(s, func(rlstore rwLayerStore, token layerWriteToken) (void, error) {
-		return void{}, rlstore.CleanupStagingDirectory(stagingDirectory)
+		return void{}, rlstore.cleanupStagingDirectory(token, stagingDirectory)
 	})
 	return err
 }

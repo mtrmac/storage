@@ -358,9 +358,9 @@ type rwLayerStore interface {
 	// for which the layer's UID and GID maps don't contain corresponding entries.
 	ParentOwners(id string) (uids, gids []int, err error)
 
-	// ApplyDiff reads a tarstream which was created by a previous call to Diff and
+	// applyDiff reads a tarstream which was created by a previous call to Diff and
 	// applies its changes to a specified layer.
-	ApplyDiff(to string, diff io.Reader) (int64, error)
+	applyDiff(token layerWriteToken, to string, diff io.Reader) (int64, error)
 
 	// applyDiffWithDiffer applies the changes through the differ callback function.
 	// If to is the empty string, then a staging directory is created by the driver.
@@ -1563,7 +1563,7 @@ func (r *layerStore) put(token layerWriteToken, id string, parentLayer *Layer, n
 
 	var size int64 = -1
 	if diff != nil {
-		size, err = r.applyDiffWithOptions(layer.ID, moreOptions, diff)
+		size, err = r.applyDiffWithOptions(token, layer.ID, moreOptions, diff)
 		if err != nil {
 			cleanupFailureContext = "applying layer diff"
 			return nil, -1, err
@@ -2404,18 +2404,11 @@ func (r *layerStore) diffSize(token layerReadToken, from, to string) (size int64
 	return r.driver.DiffSize(to, r.layerMappings(toLayer), from, r.layerMappings(fromLayer), toLayer.MountLabel)
 }
 
-// Requires startWriting.
-func (r *layerStore) ApplyDiff(to string, diff io.Reader) (size int64, err error) {
-	return r.applyDiffWithOptions(to, nil, diff)
+func (r *layerStore) applyDiff(token layerWriteToken, to string, diff io.Reader) (size int64, err error) {
+	return r.applyDiffWithOptions(token, to, nil, diff)
 }
 
-// Requires startWriting.
-// FIXME: Require layerWriteToken
-func (r *layerStore) applyDiffWithOptions(to string, layerOptions *LayerOptions, diff io.Reader) (size int64, err error) {
-	if !r.lockfile.IsReadWrite() {
-		return -1, fmt.Errorf("not allowed to modify layer contents at %q: %w", r.layerdir, ErrStoreIsReadOnly)
-	}
-
+func (r *layerStore) applyDiffWithOptions(token layerWriteToken, to string, layerOptions *LayerOptions, diff io.Reader) (size int64, err error) {
 	layer, ok := r.lookup(to)
 	if !ok {
 		return -1, ErrLayerUnknown

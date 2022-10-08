@@ -2693,7 +2693,7 @@ func (s *store) DifferTarget(id string) (string, error) {
 func (s *store) ApplyDiff(to string, diff io.Reader) (int64, error) {
 	return writeToLayerStore(s, func(rlstore rwLayerStore, token layerWriteToken) (int64, error) {
 		if rlstore.exists(token.readToken, to) {
-			return rlstore.ApplyDiff(to, diff)
+			return rlstore.applyDiff(token, to, diff)
 		}
 		return -1, ErrLayerUnknown
 	})

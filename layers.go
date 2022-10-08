@@ -321,7 +321,15 @@ type rwLayerStore interface {
 	// layers, it should not be written to.  An SELinux label to be applied to the
 	// mount can be specified to override the one configured for the layer.
 	// The mappings used by the container can be specified.
+	//
+	// Deprecated: Use mount()
 	Mount(id string, options drivers.MountOpts) (string, error)
+	// Mount mounts a layer for use.  If the specified layer is the parent of other
+	// layers, it should not be written to.  An SELinux label to be applied to the
+	// mount can be specified to override the one configured for the layer.
+	// The mappings used by the container can be specified.
+	// writeToken is optional, and can be nil instead.
+	mount(readToken layerReadToken, writeToken *layerWriteToken, id string, options drivers.MountOpts) (string, error)
 
 	// unmount unmounts a layer when it is no longer in use.
 	// If conditional is set, it will fail with ErrLayerNotMounted if the layer is not mounted (without conditional, the caller is
@@ -1599,8 +1607,17 @@ func (r *layerStore) Mounted(id string) (int, error) {
 	return layer.MountCount, nil
 }
 
-// Requires startWriting.
+// Deprecated: Use mount().
 func (r *layerStore) Mount(id string, options drivers.MountOpts) (string, error) {
+	var mountPoint string
+	var err error
+	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
+		mountPoint, err = r.mount(token.readToken, &token, id, options)
+	})
+	return mountPoint, err
+}
+
+func (r *layerStore) mount(readToken layerReadToken, writeToken *layerWriteToken, id string, options drivers.MountOpts) (string, error) {
 	// LOCKING BUG: This is reachable via store.Diff → layerStore.Diff → layerStore.newFileGetter
 	// (with btrfs and zfs graph drivers) holding layerStore only locked for reading, while it modifies
 	// - r.layers[].MountCount (directly and via loadMounts / saveMounts)
@@ -1619,7 +1636,7 @@ func (r *layerStore) Mount(id string, options drivers.MountOpts) (string, error)
 
 	// You are not allowed to mount layers from readonly stores if they
 	// are not mounted read/only.
-	if !r.lockfile.IsReadWrite() && !hasReadOnlyOpt(options.Options) {
+	if writeToken == nil && !hasReadOnlyOpt(options.Options) {
 		return "", fmt.Errorf("not allowed to update mount locations for layers at %q: %w", r.mountspath(), ErrStoreIsReadOnly)
 	}
 	r.mountsLockfile.Lock()
@@ -2166,6 +2183,7 @@ func (r *layerStore) newFileGetter(id string) (drivers.FileGetCloser, error) {
 	if getter, ok := r.driver.(drivers.DiffGetterDriver); ok {
 		return getter.DiffGetter(id)
 	}
+	// FIXME FIXME: This needs a token - a read-only one only??
 	path, err := r.Mount(id, drivers.MountOpts{})
 	if err != nil {
 		return nil, err

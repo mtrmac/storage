@@ -2494,20 +2494,22 @@ func (s *store) mount(id string, options drivers.MountOpts) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	token, err := rlstore.startWriting()
-	if err != nil {
+	var mountPoint string
+	if err := layerWriteAccess(rlstore, func(token layerWriteToken) error {
+		if options.UidMaps != nil || options.GidMaps != nil {
+			options.DisableShifting = !canUseShifting(rlstore, options.UidMaps, options.GidMaps)
+		}
+
+		if rlstore.exists(token.readToken, id) {
+			mountPoint, err = rlstore.mount(token.readToken, &token, id, options)
+			return err
+		}
+		return ErrLayerUnknown
+	}); err != nil {
 		return "", err
 	}
-	defer rlstore.stopWriting(token)
+	return mountPoint, nil
 
-	if options.UidMaps != nil || options.GidMaps != nil {
-		options.DisableShifting = !canUseShifting(rlstore, options.UidMaps, options.GidMaps)
-	}
-
-	if rlstore.Exists(id) {
-		return rlstore.Mount(id, options)
-	}
-	return "", ErrLayerUnknown
 }
 
 func (s *store) MountImage(id string, mountOpts []string, mountLabel string) (string, error) {

@@ -2428,7 +2428,7 @@ func (s *store) Delete(id string) error {
 		if s.containerStore.Exists(id) {
 			if container, err := s.containerStore.Get(id); err == nil {
 				if rlstore.exists(layerToken.readToken, container.LayerID) {
-					if err = rlstore.Delete(container.LayerID); err != nil {
+					if err = rlstore.delete(layerToken, container.LayerID); err != nil {
 						return err
 					}
 					if err = s.containerStore.Delete(id); err != nil {
@@ -2452,7 +2452,7 @@ func (s *store) Delete(id string) error {
 			return s.imageStore.Delete(id)
 		}
 		if rlstore.exists(layerToken.readToken, id) {
-			return rlstore.Delete(id)
+			return rlstore.delete(layerToken, id)
 		}
 		return ErrLayerUnknown
 	})

@@ -2660,7 +2660,7 @@ func (s *store) ApplyDiffFromStagingDirectory(to, stagingDirectory string, diffO
 		if !rlstore.exists(token.readToken, to) {
 			return void{}, ErrLayerUnknown
 		}
-		return void{}, rlstore.ApplyDiffFromStagingDirectory(to, stagingDirectory, diffOutput, options)
+		return void{}, rlstore.applyDiffFromStagingDirectory(token, to, stagingDirectory, diffOutput, options)
 	})
 	return err
 }

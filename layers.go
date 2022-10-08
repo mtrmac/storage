@@ -369,8 +369,8 @@ type rwLayerStore interface {
 	// CleanupStagingDirectory cleanups the staging directory.  It can be used to cleanup the staging directory on errors
 	CleanupStagingDirectory(stagingDirectory string) error
 
-	// ApplyDiffFromStagingDirectory uses stagingDirectory to create the diff.
-	ApplyDiffFromStagingDirectory(id, stagingDirectory string, diffOutput *drivers.DriverWithDifferOutput, options *drivers.ApplyDiffOpts) error
+	// applyDiffFromStagingDirectory uses stagingDirectory to create the diff.
+	applyDiffFromStagingDirectory(token layerWriteToken, id, stagingDirectory string, diffOutput *drivers.DriverWithDifferOutput, options *drivers.ApplyDiffOpts) error
 
 	// DifferTarget gets the location where files are stored for the layer.
 	DifferTarget(id string) (string, error)
@@ -2570,8 +2570,7 @@ func (r *layerStore) DifferTarget(id string) (string, error) {
 	return ddriver.DifferTarget(layer.ID)
 }
 
-// Requires startWriting.
-func (r *layerStore) ApplyDiffFromStagingDirectory(id, stagingDirectory string, diffOutput *drivers.DriverWithDifferOutput, options *drivers.ApplyDiffOpts) error {
+func (r *layerStore) applyDiffFromStagingDirectory(token layerWriteToken, id, stagingDirectory string, diffOutput *drivers.DriverWithDifferOutput, options *drivers.ApplyDiffOpts) error {
 	ddriver, ok := r.driver.(drivers.DriverWithDiffer)
 	if !ok {
 		return ErrNotSupported
@@ -2599,8 +2598,8 @@ func (r *layerStore) ApplyDiffFromStagingDirectory(id, stagingDirectory string, 
 		return err
 	}
 	for k, v := range diffOutput.BigData {
-		if err := r.SetBigData(id, k, bytes.NewReader(v)); err != nil {
-			if err2 := r.Delete(id); err2 != nil {
+		if err := r.setBigData(token, id, k, bytes.NewReader(v)); err != nil {
+			if err2 := r.delete(token, id); err2 != nil {
 				logrus.Errorf("While recovering from a failure to set big data, error deleting layer %#v: %v", id, err2)
 			}
 			return err

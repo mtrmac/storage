@@ -252,10 +252,10 @@ type roLayerStore interface {
 	// produced by Diff.
 	diffSize(token layerReadToken, from, to string) (int64, error)
 
-	// Size produces a cached value for the uncompressed size of the layer,
+	// size produces a cached value for the uncompressed size of the layer,
 	// if one is known, or -1 if it is not known.  If the layer can not be
 	// found, it returns an error.
-	Size(name string) (int64, error)
+	size(token layerReadToken, name string) (int64, error)
 
 	// LayersByCompressedDigest returns a slice of the layers with the
 	// specified compressed digest value recorded for them.
@@ -1277,8 +1277,7 @@ func (r *layerStore) lookup(id string) (*Layer, bool) {
 	return nil, false
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) Size(name string) (int64, error) {
+func (r *layerStore) size(token layerReadToken, name string) (int64, error) {
 	layer, ok := r.lookup(name)
 	if !ok {
 		return -1, ErrLayerUnknown

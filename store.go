@@ -2736,8 +2736,8 @@ func (s *store) LayersByUncompressedDigest(d digest.Digest) ([]Layer, error) {
 
 func (s *store) LayerSize(id string) (int64, error) {
 	if res, done, err := readAllLayerStores(s, func(store roLayerStore, token layerReadToken) (int64, bool, error) {
-		if store.Exists(id) {
-			res, err := store.Size(id)
+		if store.exists(token, id) {
+			res, err := store.size(token, id)
 			return res, true, err
 		}
 		return -1, false, nil

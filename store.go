@@ -2369,7 +2369,7 @@ func (s *store) DeleteContainer(id string) error {
 		if rlstore.exists(layerToken.readToken, container.LayerID) {
 			wg.Add(1)
 			go func() {
-				errChan <- rlstore.Delete(container.LayerID)
+				errChan <- rlstore.delete(layerToken, container.LayerID)
 				wg.Done()
 			}()
 		}

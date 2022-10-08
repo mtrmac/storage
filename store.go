@@ -2833,7 +2833,7 @@ func (s *store) Containers() ([]Container, error) {
 
 func (s *store) Layer(id string) (*Layer, error) {
 	if res, done, err := readAllLayerStores(s, func(store roLayerStore, token layerReadToken) (*Layer, bool, error) {
-		layer, err := store.Get(id)
+		layer, err := store.get(token, id)
 		if err == nil {
 			return layer, true, nil
 		}

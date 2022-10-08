@@ -2684,7 +2684,7 @@ func (s *store) ApplyDiffWithDiffer(to string, options *drivers.ApplyDiffOpts, d
 func (s *store) DifferTarget(id string) (string, error) {
 	return writeToLayerStore(s, func(rlstore rwLayerStore, token layerWriteToken) (string, error) {
 		if rlstore.exists(token.readToken, id) {
-			return rlstore.DifferTarget(id)
+			return rlstore.differTarget(token, id)
 		}
 		return "", ErrLayerUnknown
 	})

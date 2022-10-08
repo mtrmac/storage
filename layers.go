@@ -372,8 +372,8 @@ type rwLayerStore interface {
 	// applyDiffFromStagingDirectory uses stagingDirectory to create the diff.
 	applyDiffFromStagingDirectory(token layerWriteToken, id, stagingDirectory string, diffOutput *drivers.DriverWithDifferOutput, options *drivers.ApplyDiffOpts) error
 
-	// DifferTarget gets the location where files are stored for the layer.
-	DifferTarget(id string) (string, error)
+	// differTarget gets the location where files are stored for the layer.
+	differTarget(token layerWriteToken, id string) (string, error)
 
 	// PutAdditionalLayer creates a layer using the diff contained in the additional layer
 	// store.
@@ -2557,8 +2557,7 @@ func (r *layerStore) applyDiffWithOptions(to string, layerOptions *LayerOptions,
 	return size, err
 }
 
-// Requires (startReading or?) startWriting.
-func (r *layerStore) DifferTarget(id string) (string, error) {
+func (r *layerStore) differTarget(token layerWriteToken, id string) (string, error) {
 	ddriver, ok := r.driver.(drivers.DriverWithDiffer)
 	if !ok {
 		return "", ErrNotSupported

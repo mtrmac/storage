@@ -354,9 +354,9 @@ type rwLayerStore interface {
 	// mounted returns number of times the layer has been mounted.
 	mounted(token layerReadToken, id string) (int, error)
 
-	// ParentOwners returns the UIDs and GIDs of parents of the layer's mountpoint
+	// parentOwners returns the UIDs and GIDs of parents of the layer's mountpoint
 	// for which the layer's UID and GID maps don't contain corresponding entries.
-	ParentOwners(id string) (uids, gids []int, err error)
+	parentOwners(token layerReadToken, id string) (uids, gids []int, err error)
 
 	// applyDiff reads a tarstream which was created by a previous call to Diff and
 	// applies its changes to a specified layer.
@@ -1750,8 +1750,8 @@ func (r *layerStore) unmount(readToken layerReadToken, writeToken *layerWriteTok
 	return true, err
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) ParentOwners(id string) (uids, gids []int, err error) {
+func (r *layerStore) parentOwners(token layerReadToken, id string) (uids, gids []int, err error) {
+	// NOTE: This has nothing to do with token, it checks whether this is the primary store.
 	if !r.lockfile.IsReadWrite() {
 		return nil, nil, fmt.Errorf("no mount information for layers at %q: %w", r.mountspath(), ErrStoreIsReadOnly)
 	}

@@ -2755,15 +2755,16 @@ func (s *store) LayerParentOwners(id string) ([]int, []int, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	token, err := rlstore.startReading()
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rlstore.stopReading(token)
-	if rlstore.Exists(id) {
-		return rlstore.ParentOwners(id)
-	}
-	return nil, nil, ErrLayerUnknown
+	var uids, gids []int
+	_, _, err = layerReadAccess(rlstore, func(token layerReadToken) (struct{}, bool, error) {
+		if rlstore.exists(token, id) {
+			var err error
+			uids, gids, err = rlstore.parentOwners(token, id)
+			return struct{}{}, true, err
+		}
+		return struct{}{}, true, ErrLayerUnknown
+	})
+	return uids, gids, err
 }
 
 func (s *store) ContainerParentOwners(id string) ([]int, []int, error) {
@@ -2771,23 +2772,24 @@ func (s *store) ContainerParentOwners(id string) ([]int, []int, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	layerToken, err := rlstore.startReading()
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rlstore.stopReading(layerToken)
-	if err := s.containerStore.startReading(); err != nil {
-		return nil, nil, err
-	}
-	defer s.containerStore.stopReading()
-	container, err := s.containerStore.Get(id)
-	if err != nil {
-		return nil, nil, err
-	}
-	if rlstore.Exists(container.LayerID) {
-		return rlstore.ParentOwners(container.LayerID)
-	}
-	return nil, nil, ErrLayerUnknown
+	var uids, gids []int
+	_, _, err = layerReadAccess(rlstore, func(layerToken layerReadToken) (struct{}, bool, error) {
+		if err := s.containerStore.startReading(); err != nil {
+			return struct{}{}, true, err
+		}
+		defer s.containerStore.stopReading()
+		container, err := s.containerStore.Get(id)
+		if err != nil {
+			return struct{}{}, true, err
+		}
+		if rlstore.exists(layerToken, container.LayerID) {
+			var err error
+			uids, gids, err = rlstore.parentOwners(layerToken, container.LayerID)
+			return struct{}{}, true, err
+		}
+		return struct{}{}, true, ErrLayerUnknown
+	})
+	return uids, gids, err
 }
 
 func (s *store) Layers() ([]Layer, error) {

@@ -1826,14 +1826,15 @@ func (s *store) SetImageBigData(id, key string, data []byte, digestManifest func
 	return err
 }
 
+type lockedLayerStore struct {
+	store roLayerStore
+	token layerReadToken
+}
+
 func (s *store) ImageSize(id string) (int64, error) {
 	unlockedLayerStores, err := s.allLayerStores()
 	if err != nil {
 		return -1, err
-	}
-	type lockedLayerStore struct {
-		store roLayerStore
-		token layerReadToken
 	}
 	lockedLayerStores := make([]lockedLayerStore, 0, len(unlockedLayerStores))
 	for _, s := range unlockedLayerStores {
@@ -1931,19 +1932,22 @@ func (s *store) ImageSize(id string) (int64, error) {
 }
 
 func (s *store) ContainerSize(id string) (int64, error) {
-	layerStores, err := s.allLayerStores()
+	unlockedLayerStores, err := s.allLayerStores()
 	if err != nil {
 		return -1, err
 	}
-	// FIXME: This preventively locks all layer stores; requires a "lock & return an unlocker"
-	// API.
-	for _, s := range layerStores {
+	lockedLayerStores := make([]lockedLayerStore, 0, len(unlockedLayerStores))
+	for _, s := range unlockedLayerStores {
 		store := s
 		token, err := store.startReading()
 		if err != nil {
 			return -1, err
 		}
 		defer store.stopReading(token)
+		lockedLayerStores = append(lockedLayerStores, lockedLayerStore{
+			store: store,
+			token: token,
+		})
 	}
 
 	// Get the location of the container directory and container run directory.
@@ -1967,9 +1971,9 @@ func (s *store) ContainerSize(id string) (int64, error) {
 		// Read the container's layer's size.
 		var layer *Layer
 		var size int64
-		for _, store := range layerStores {
-			if layer, err = store.Get(container.LayerID); err == nil {
-				size, err = store.DiffSize("", layer.ID)
+		for _, store := range lockedLayerStores {
+			if layer, err = store.store.get(store.token, container.LayerID); err == nil {
+				size, err = store.store.diffSize(store.token, "", layer.ID)
 				if err != nil {
 					return -1, fmt.Errorf("determining size of layer with ID %q: %w", layer.ID, err)
 				}

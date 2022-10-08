@@ -245,11 +245,6 @@ type roLayerStore interface {
 
 	// DiffSize produces an estimate of the length of the tarstream which would be
 	// produced by Diff.
-	//
-	// Deprecated: Use diffSize
-	DiffSize(from, to string) (int64, error)
-	// DiffSize produces an estimate of the length of the tarstream which would be
-	// produced by Diff.
 	diffSize(token layerReadToken, from, to string) (int64, error)
 
 	// size produces a cached value for the uncompressed size of the layer,
@@ -2357,17 +2352,6 @@ func (r *layerStore) Diff(from, to string, options *DiffOptions) (io.ReadCloser,
 		return nil
 	})
 	return maybeCompressReadCloser(rc)
-}
-
-// Requires startReading or startWriting.
-// Deprecated: Use diffSize
-func (r *layerStore) DiffSize(from, to string) (int64, error) {
-	var size int64
-	var err error
-	r.privateWithFakeLayerReadToken(func(token layerReadToken) {
-		size, err = r.diffSize(token, from, to)
-	})
-	return size, err
 }
 
 func (r *layerStore) diffSize(token layerReadToken, from, to string) (size int64, err error) {

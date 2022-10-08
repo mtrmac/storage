@@ -2466,7 +2466,7 @@ func (s *store) Wipe() error {
 		if err := s.imageStore.Wipe(); err != nil {
 			return err
 		}
-		return rlstore.Wipe()
+		return rlstore.wipe(layerToken)
 	})
 }
 

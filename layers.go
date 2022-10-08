@@ -314,8 +314,8 @@ type rwLayerStore interface {
 	// Delete deletes a layer with the specified name or ID.
 	delete(token layerWriteToken, id string) error
 
-	// Wipe deletes all layers.
-	Wipe() error
+	// wipe deletes all layers.
+	wipe(token layerWriteToken) error
 
 	// Mount mounts a layer for use.  If the specified layer is the parent of other
 	// layers, it should not be written to.  An SELinux label to be applied to the
@@ -2086,11 +2086,7 @@ func (r *layerStore) get(_ layerReadToken, id string) (*Layer, error) {
 	return nil, ErrLayerUnknown
 }
 
-// Requires startWriting.
-func (r *layerStore) Wipe() error {
-	if !r.lockfile.IsReadWrite() {
-		return fmt.Errorf("not allowed to delete layers at %q: %w", r.layerdir, ErrStoreIsReadOnly)
-	}
+func (r *layerStore) wipe(token layerWriteToken) error {
 	ids := make([]string, 0, len(r.byid))
 	for id := range r.byid {
 		ids = append(ids, id)
@@ -2099,7 +2095,7 @@ func (r *layerStore) Wipe() error {
 		return r.byid[ids[i]].Created.After(r.byid[ids[j]].Created)
 	})
 	for _, id := range ids {
-		if err := r.Delete(id); err != nil {
+		if err := r.delete(token, id); err != nil {
 			return err
 		}
 	}

@@ -2602,8 +2602,8 @@ func (s *store) Changes(from, to string) ([]archive.Change, error) {
 
 func (s *store) DiffSize(from, to string) (int64, error) {
 	if res, done, err := readAllLayerStores(s, func(store roLayerStore, token layerReadToken) (int64, bool, error) {
-		if store.Exists(to) {
-			res, err := store.DiffSize(from, to)
+		if store.exists(token, to) {
+			res, err := store.diffSize(token, from, to)
 			return res, true, err
 		}
 		return -1, false, nil

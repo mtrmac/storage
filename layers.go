@@ -465,6 +465,7 @@ func (r *layerStore) privatePutLayerWriteToken(token layerWriteToken) {
 // privateWithFakeLayerWriteToken obtains a  fake layerWriteToken and calls fn
 // DO NOT CALL THIS EVER, it exists only as an interim PR artifact.
 // Almost all users should call layerWriteAccess() instead.
+// FIXME: Eventually eliminate this.
 func (r *layerStore) privateWithFakeLayerWriteToken(fn func(token layerWriteToken)) {
 	token := layerWriteToken{}
 	fn(token)
@@ -490,6 +491,7 @@ func (r *layerStore) privatePutLayerReadToken(token layerReadToken) {
 // privateWithFakeLayerReadToken obtains a  fake layerReadToken and calls fn
 // DO NOT CALL THIS EVER, it exists only as an interim PR artifact.
 // Almost all users should call layerReadAccess() instead.
+// FIXME: Eventually eliminate this.
 func (r *layerStore) privateWithFakeLayerReadToken(fn func(token layerReadToken)) {
 	token := layerReadToken{}
 	fn(token)
@@ -1223,11 +1225,10 @@ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (roL
 // need a layerReadToken can be called.
 // Callers MUST NOT save token and use it after layerReadAccess terminates.
 func layerReadAccess[T any](r roLayerStore, fn func(token layerReadToken) (T, bool, error)) (T, bool, error) {
-	var res T // A zero value of T
-
 	token, err := r.startReading()
 	if err != nil {
-		return res, true, err
+		var zeroRes T // A zero value of T
+		return zeroRes, true, err
 	}
 	defer r.stopReading(token)
 	return fn(token)

@@ -1304,6 +1304,7 @@ func (r *layerStore) SetFlag(id string, flag string, value interface{}) error {
 }
 
 func (r *layerStore) Status() ([][2]string, error) {
+	// NOTE: This is called without any lock held.
 	return r.driver.Status(), nil
 }
 

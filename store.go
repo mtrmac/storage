@@ -1164,9 +1164,10 @@ func (s *store) readAllImageStores(fn func(store roImageStore) (bool, error)) (b
 // writeToImageStore is a convenience helper for working with store.getImageStore():
 // It locks the store for writing, checks for updates, and calls fn(), which can then access store.imageStore.
 // It returns the return value of fn, or its own error initializing the store.
-func (s *store) writeToImageStore(fn func() error) error {
+func writeToImageStore[T any](s *store, fn func() (T, error)) (T, error) {
 	if err := s.imageStore.startWriting(); err != nil {
-		return err
+		var zeroRes T // A zero value of T
+		return zeroRes, err
 	}
 	defer s.imageStore.stopWriting()
 	return fn()
@@ -1338,18 +1339,14 @@ func (s *store) CreateImage(id string, names []string, layer, metadata string, o
 		layer = ilayer.ID
 	}
 
-	var res *Image
-	err := s.writeToImageStore(func() error {
+	return writeToImageStore(s, func() (*Image, error) {
 		creationDate := time.Now().UTC()
 		if options != nil && !options.CreationDate.IsZero() {
 			creationDate = options.CreationDate
 		}
 
-		var err error
-		res, err = s.imageStore.Create(id, names, layer, metadata, creationDate, options.Digest)
-		return err
+		return s.imageStore.Create(id, names, layer, metadata, creationDate, options.Digest)
 	})
-	return res, err
 }
 
 // imageTopLayerForMapping does ???
@@ -1823,9 +1820,10 @@ func (s *store) SetLayerBigData(id, key string, data io.Reader) error {
 }
 
 func (s *store) SetImageBigData(id, key string, data []byte, digestManifest func([]byte) (digest.Digest, error)) error {
-	return s.writeToImageStore(func() error {
-		return s.imageStore.SetBigData(id, key, data, digestManifest)
+	_, err := writeToImageStore(s, func() (void, error) {
+		return void{}, s.imageStore.SetBigData(id, key, data, digestManifest)
 	})
+	return err
 }
 
 func (s *store) ImageSize(id string) (int64, error) {

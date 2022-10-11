@@ -1190,26 +1190,24 @@ func writeToContainerStore[T any](s *store, fn func() (T, error)) (T, error) {
 // It locks the stores for writing, checks for updates, and calls fn(), which can then access the provided layer store,
 // s.imageStore and s.containerStore.
 // It returns the return value of fn, or its own error initializing the stores.
-func (s *store) writeToAllStores(fn func(rlstore rwLayerStore) error) error {
+func (s *store) writeToAllStores(fn func(rlstore rwLayerStore, layerToken layerWriteToken) error) error {
 	rlstore, err := s.getLayerStore()
 	if err != nil {
 		return err
 	}
 
-	if err := rlstore.startWriting(); err != nil {
-		return err
-	}
-	defer rlstore.stopWriting()
-	if err := s.imageStore.startWriting(); err != nil {
-		return err
-	}
-	defer s.imageStore.stopWriting()
-	if err := s.containerStore.startWriting(); err != nil {
-		return err
-	}
-	defer s.containerStore.stopWriting()
+	return layerWriteAccess(rlstore, func(layerToken layerWriteToken) error {
+		if err := s.imageStore.startWriting(); err != nil {
+			return err
+		}
+		defer s.imageStore.stopWriting()
+		if err := s.containerStore.startWriting(); err != nil {
+			return err
+		}
+		defer s.containerStore.stopWriting()
 
-	return fn(rlstore)
+		return fn(rlstore, layerToken)
+	})
 }
 
 // canUseShifting returns ???
@@ -1645,8 +1643,8 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 }
 
 func (s *store) SetMetadata(id, metadata string) error {
-	return s.writeToAllStores(func(rlstore rwLayerStore) error {
-		if rlstore.Exists(id) {
+	return s.writeToAllStores(func(rlstore rwLayerStore, layerToken layerWriteToken) error {
+		if rlstore.exists(layerToken.readToken, id) {
 			return rlstore.SetMetadata(id, metadata)
 		}
 		if s.imageStore.Exists(id) {
@@ -2178,8 +2176,8 @@ func (s *store) Lookup(name string) (string, error) {
 }
 
 func (s *store) DeleteLayer(id string) error {
-	return s.writeToAllStores(func(rlstore rwLayerStore) error {
-		if rlstore.Exists(id) {
+	return s.writeToAllStores(func(rlstore rwLayerStore, layerToken layerWriteToken) error {
+		if rlstore.exists(layerToken.readToken, id) {
 			if l, err := rlstore.Get(id); err != nil {
 				id = l.ID
 			}
@@ -2230,7 +2228,7 @@ func (s *store) DeleteLayer(id string) error {
 
 func (s *store) DeleteImage(id string, commit bool) (layers []string, err error) {
 	layersToRemove := []string{}
-	if err := s.writeToAllStores(func(rlstore rwLayerStore) error {
+	if err := s.writeToAllStores(func(rlstore rwLayerStore, layerToken layerWriteToken) error {
 		if s.imageStore.Exists(id) {
 			image, err := s.imageStore.Get(id)
 			if err != nil {
@@ -2333,7 +2331,7 @@ func (s *store) DeleteImage(id string, commit bool) (layers []string, err error)
 }
 
 func (s *store) DeleteContainer(id string) error {
-	return s.writeToAllStores(func(rlstore rwLayerStore) error {
+	return s.writeToAllStores(func(rlstore rwLayerStore, layerToken layerWriteToken) error {
 		if !s.containerStore.Exists(id) {
 			return ErrNotAContainer
 		}
@@ -2346,7 +2344,7 @@ func (s *store) DeleteContainer(id string) error {
 		errChan := make(chan error)
 		var wg sync.WaitGroup
 
-		if rlstore.Exists(container.LayerID) {
+		if rlstore.exists(layerToken.readToken, container.LayerID) {
 			wg.Add(1)
 			go func() {
 				errChan <- rlstore.Delete(container.LayerID)
@@ -2404,10 +2402,10 @@ func (s *store) DeleteContainer(id string) error {
 }
 
 func (s *store) Delete(id string) error {
-	return s.writeToAllStores(func(rlstore rwLayerStore) error {
+	return s.writeToAllStores(func(rlstore rwLayerStore, layerToken layerWriteToken) error {
 		if s.containerStore.Exists(id) {
 			if container, err := s.containerStore.Get(id); err == nil {
-				if rlstore.Exists(container.LayerID) {
+				if rlstore.exists(layerToken.readToken, container.LayerID) {
 					if err = rlstore.Delete(container.LayerID); err != nil {
 						return err
 					}
@@ -2431,7 +2429,7 @@ func (s *store) Delete(id string) error {
 		if s.imageStore.Exists(id) {
 			return s.imageStore.Delete(id)
 		}
-		if rlstore.Exists(id) {
+		if rlstore.exists(layerToken.readToken, id) {
 			return rlstore.Delete(id)
 		}
 		return ErrLayerUnknown
@@ -2439,7 +2437,7 @@ func (s *store) Delete(id string) error {
 }
 
 func (s *store) Wipe() error {
-	return s.writeToAllStores(func(rlstore rwLayerStore) error {
+	return s.writeToAllStores(func(rlstore rwLayerStore, layerToken layerWriteToken) error {
 		if err := s.containerStore.Wipe(); err != nil {
 			return err
 		}

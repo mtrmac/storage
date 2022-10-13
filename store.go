@@ -1337,7 +1337,7 @@ func (s *store) CreateImage(id string, names []string, layer, metadata string, o
 				return nil, err
 			}
 			defer store.stopReading(lToken)
-			ilayer, err = store.Get(layer)
+			ilayer, err = store.get(lToken, layer)
 			if err == nil {
 				break
 			}

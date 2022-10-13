@@ -1257,14 +1257,12 @@ func (s *store) PutLayer(id, parent string, names []string, mountLabel string, w
 			} else {
 				for _, l := range rlstores {
 					lstore := l
-					// FIXME: This lstore needs(?) to be kept locked for the remainder of this function,
-					// not just for the Get.
 					lToken, err := lstore.startReading()
 					if err != nil {
 						return err
 					}
 					defer lstore.stopReading(lToken)
-					if l, err := lstore.Get(parent); err == nil && l != nil {
+					if l, err := lstore.get(lToken, parent); err == nil && l != nil {
 						ilayer = l
 						parent = ilayer.ID
 						break

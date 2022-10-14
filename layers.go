@@ -778,6 +778,7 @@ func (r *layerStore) mountspath() string {
 // If !lockedForWriting and this function fails, the return value indicates whether
 // retrying with lockedForWriting could succeed.
 // FIXME: Use layerWriteToken
+// FIXME: Some special load token? We need to represent the ability to write to layerStore but OPTIONALLY to the filesystem.
 func (r *layerStore) load(lockedForWriting bool) (bool, error) {
 	var modifiedLocations layerLocations
 
@@ -935,6 +936,7 @@ func (r *layerStore) load(lockedForWriting bool) (bool, error) {
 
 // The caller must hold r.mountsLockfile for reading or writing.
 // The caller must hold r.inProcessLock for WRITING.
+// FIXME: load token??
 func (r *layerStore) loadMounts() error {
 	mounts := make(map[string]*Layer)
 	mpath := r.mountspath()
@@ -988,12 +990,14 @@ func (r *layerStore) save(saveLocations layerLocations) error {
 // saveFor saves the contents of the store relevant for modifiedLayer to disk.
 // The caller must hold r.lockfile locked for writing.
 // The caller must hold r.inProcessLock for WRITING.
+// FIXME: layerWriteToken
 func (r *layerStore) saveFor(modifiedLayer *Layer) error {
 	return r.save(layerLocation(modifiedLayer))
 }
 
 // The caller must hold r.lockfile locked for writing.
 // The caller must hold r.inProcessLock for WRITING.
+// FIXME: layerWriteToken
 func (r *layerStore) saveLayers(saveLocations layerLocations) error {
 	if !r.lockfile.IsReadWrite() {
 		return fmt.Errorf("not allowed to modify the layer store at %q: %w", r.layerdir, ErrStoreIsReadOnly)
@@ -1039,6 +1043,7 @@ func (r *layerStore) saveLayers(saveLocations layerLocations) error {
 
 // The caller must hold r.mountsLockfile for writing.
 // The caller must hold r.inProcessLock for WRITING.
+// FIXME: write token
 func (r *layerStore) saveMounts() error {
 	if !r.lockfile.IsReadWrite() {
 		return fmt.Errorf("not allowed to modify the layer store at %q: %w", r.layerdir, ErrStoreIsReadOnly)

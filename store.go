@@ -2926,17 +2926,18 @@ func (al *additionalLayer) PutAs(id, parent string, names []string) (*Layer, err
 
 	var parentLayer *Layer
 	if parent != "" {
-		for _, lstore := range append([]roLayerStore{rlstore}, rlstores...) {
-			if lstore != rlstore {
+		parentLayer, err = rlstore.get(token.readToken, parent)
+		if err != nil {
+			for _, lstore := range rlstores {
 				lToken, err := lstore.startReading()
 				if err != nil {
 					return nil, err
 				}
-				defer lstore.stopReading(lToken) // FIXME: This requires unlock at end (?)
-			}
-			parentLayer, err = lstore.Get(parent)
-			if err == nil {
-				break
+				defer lstore.stopReading(lToken)
+				parentLayer, err = lstore.get(lToken, parent)
+				if err == nil {
+					break
+				}
 			}
 		}
 		if parentLayer == nil {
@@ -2944,7 +2945,7 @@ func (al *additionalLayer) PutAs(id, parent string, names []string) (*Layer, err
 		}
 	}
 
-	return rlstore.PutAdditionalLayer(id, parentLayer, names, al.handler)
+	return rlstore.putAdditionalLayer(token, id, parentLayer, names, al.handler)
 }
 
 func (al *additionalLayer) Release() {

@@ -216,10 +216,6 @@ type roLayerStore interface {
 	exists(token layerReadToken, id string) bool
 
 	// Get retrieves information about a layer given an ID or name.
-	//
-	// Deprecated: Use get()
-	Get(id string) (*Layer, error)
-	// Get retrieves information about a layer given an ID or name.
 	get(token layerReadToken, id string) (*Layer, error)
 
 	// Status returns an slice of key-value pairs, suitable for human consumption,
@@ -341,15 +337,17 @@ type rwLayerStore interface {
 	// differTarget gets the location where files are stored for the layer.
 	differTarget(token layerWriteToken, id string) (string, error)
 
-	// PutAdditionalLayer creates a layer using the diff contained in the additional layer
+	// putAdditionalLayer creates a layer using the diff contained in the additional layer
 	// store.
 	// This API is experimental and can be changed without bumping the major version number.
-	PutAdditionalLayer(id string, parentLayer *Layer, names []string, aLayer drivers.AdditionalLayer) (layer *Layer, err error)
+	putAdditionalLayer(token layerWriteToken, id string, parentLayer *Layer, names []string, aLayer drivers.AdditionalLayer) (layer *Layer, err error)
 
 	// Clean up unreferenced layers
+	// FIXME: token
 	GarbageCollect() error
 
 	// supportsShifting() returns true if the driver.Driver.SupportsShifting().
+	// FIXME: token
 	supportsShifting() bool
 }
 
@@ -1281,8 +1279,7 @@ func (r *layerStore) Status() ([][2]string, error) {
 	return r.driver.Status(), nil
 }
 
-// Requires startWriting.
-func (r *layerStore) PutAdditionalLayer(id string, parentLayer *Layer, names []string, aLayer drivers.AdditionalLayer) (layer *Layer, err error) {
+func (r *layerStore) putAdditionalLayer(token layerWriteToken, id string, parentLayer *Layer, names []string, aLayer drivers.AdditionalLayer) (layer *Layer, err error) {
 	if duplicateLayer, idInUse := r.byid[id]; idInUse {
 		return duplicateLayer, ErrDuplicateID
 	}
@@ -1994,16 +1991,6 @@ func (r *layerStore) delete(token layerWriteToken, id string) error {
 func (r *layerStore) exists(_ layerReadToken, id string) bool {
 	_, ok := r.lookup(id)
 	return ok
-}
-
-// Deprecated: use get()
-func (r *layerStore) Get(id string) (*Layer, error) {
-	var res *Layer
-	var err error
-	r.privateWithFakeLayerReadToken(func(token layerReadToken) {
-		res, err = r.get(token, id)
-	})
-	return res, err
 }
 
 func (r *layerStore) get(_ layerReadToken, id string) (*Layer, error) {

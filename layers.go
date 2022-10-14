@@ -261,7 +261,6 @@ type roLayerStore interface {
 // all known layers.
 type rwLayerStore interface {
 	roLayerStore
-	flaggableStore
 	rwLayerBigDataStore
 
 	// startWriting makes sure the store is fresh, and locks it for writing.
@@ -1240,35 +1239,6 @@ func (r *layerStore) size(token layerReadToken, name string) (int64, error) {
 		return layer.UncompressedSize, nil
 	}
 	return -1, nil
-}
-
-// Requires startWriting.
-func (r *layerStore) ClearFlag(id string, flag string) error {
-	if !r.lockfile.IsReadWrite() {
-		return fmt.Errorf("not allowed to clear flags on layers at %q: %w", r.layerdir, ErrStoreIsReadOnly)
-	}
-	layer, ok := r.lookup(id)
-	if !ok {
-		return ErrLayerUnknown
-	}
-	delete(layer.Flags, flag)
-	return r.saveFor(layer)
-}
-
-// Requires startWriting.
-func (r *layerStore) SetFlag(id string, flag string, value interface{}) error {
-	if !r.lockfile.IsReadWrite() {
-		return fmt.Errorf("not allowed to set flags on layers at %q: %w", r.layerdir, ErrStoreIsReadOnly)
-	}
-	layer, ok := r.lookup(id)
-	if !ok {
-		return ErrLayerUnknown
-	}
-	if layer.Flags == nil {
-		layer.Flags = make(map[string]interface{})
-	}
-	layer.Flags[flag] = value
-	return r.saveFor(layer)
 }
 
 func (r *layerStore) Status() ([][2]string, error) {

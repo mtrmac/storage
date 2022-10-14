@@ -960,11 +960,13 @@ func (r *layerStore) loadMounts() error {
 		// we reset the still-mounted ones based on the contents.
 		for _, mount := range layerMounts {
 			if mount.MountPoint != "" {
-				if layer, ok := r.lookup(mount.ID); ok {
-					mounts[mount.MountPoint] = layer
-					layer.MountPoint = mount.MountPoint
-					layer.MountCount = mount.MountCount
-				}
+				r.privateWithFakeLayerWriteToken(func(token layerWriteToken) { // FIXME
+					if layer, ok := r.lookup(token.readToken, mount.ID); ok {
+						mounts[mount.MountPoint] = layer
+						layer.MountPoint = mount.MountPoint
+						layer.MountCount = mount.MountCount
+					}
+				})
 			}
 		}
 		err = nil
@@ -1212,9 +1214,10 @@ func layerWriteAccess(r rwLayerStore, fn func(token layerWriteToken) error) erro
 	return fn(token)
 }
 
-// Requires startReading or startWriting.
-// FIXME: Require layerReadToken
-func (r *layerStore) lookup(id string) (*Layer, bool) {
+// lookup finds an owned Layer object
+// WARNING: The object is ony valid as long as the token is held.
+// Writing to the Layer can’t be prevented, and doing that only with a layerWriteToken is the caller’s responsibility.
+func (r *layerStore) lookup(_ layerReadToken, id string) (*Layer, bool) {
 	if layer, ok := r.byid[id]; ok {
 		return layer, ok
 	} else if layer, ok := r.byname[id]; ok {
@@ -1227,7 +1230,7 @@ func (r *layerStore) lookup(id string) (*Layer, bool) {
 }
 
 func (r *layerStore) size(token layerReadToken, name string) (int64, error) {
-	layer, ok := r.lookup(name)
+	layer, ok := r.lookup(token, name)
 	if !ok {
 		return -1, ErrLayerUnknown
 	}
@@ -1342,7 +1345,7 @@ func (r *layerStore) put(token layerWriteToken, id string, parentLayer *Layer, n
 	)
 	if moreOptions.TemplateLayer != "" {
 		var tserr error
-		templateLayer, ok := r.lookup(moreOptions.TemplateLayer)
+		templateLayer, ok := r.lookup(token.readToken, moreOptions.TemplateLayer)
 		if !ok {
 			return nil, -1, ErrLayerUnknown
 		}
@@ -1507,7 +1510,7 @@ func (r *layerStore) mounted(token layerReadToken, id string) (int, error) {
 	if !r.lockfile.IsReadWrite() {
 		return 0, fmt.Errorf("no mount information for layers at %q: %w", r.mountspath(), ErrStoreIsReadOnly)
 	}
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(token, id)
 	if !ok {
 		return 0, ErrLayerUnknown
 	}
@@ -1545,7 +1548,7 @@ func (r *layerStore) mount(readToken layerReadToken, writeToken *layerWriteToken
 	if err := r.reloadMountsIfChanged(); err != nil {
 		return "", err
 	}
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(readToken, id) // FIXME: The write accesses below really require a writeToken.
 	if !ok {
 		return "", ErrLayerUnknown
 	}
@@ -1600,7 +1603,7 @@ func (r *layerStore) unmount(readToken layerReadToken, writeToken *layerWriteTok
 	if err := r.reloadMountsIfChanged(); err != nil {
 		return false, err
 	}
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(readToken, id) // FIXME: The write accesses below really require a writeToken.
 	if !ok {
 		layerByMount, ok := r.bymount[filepath.Clean(id)]
 		if !ok {
@@ -1641,7 +1644,7 @@ func (r *layerStore) parentOwners(token layerReadToken, id string) (uids, gids [
 	// We are not checking r.mountsLockfile.Modified() and calling r.loadMounts here because the store
 	// is only locked for reading = we are not allowed to modify layer data.
 	// Holding r.mountsLockfile protects us against concurrent mount/unmount operations.
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(token, id)
 	if !ok {
 		return nil, nil, ErrLayerUnknown
 	}
@@ -1715,7 +1718,7 @@ func (r *layerStore) removeName(layer *Layer, name string) {
 }
 
 func (r *layerStore) updateNames(token layerWriteToken, id string, names []string, op updateNameOperation) error {
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(token.readToken, id)
 	if !ok {
 		return ErrLayerUnknown
 	}
@@ -1745,11 +1748,11 @@ func (r *layerStore) datapath(id, key string) string {
 	return filepath.Join(r.datadir(id), makeBigDataBaseName(key))
 }
 
-func (r *layerStore) bigData(_ layerReadToken, id, key string) (io.ReadCloser, error) {
+func (r *layerStore) bigData(token layerReadToken, id, key string) (io.ReadCloser, error) {
 	if key == "" {
 		return nil, fmt.Errorf("can't retrieve layer big data value for empty name: %w", ErrInvalidBigDataName)
 	}
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(token, id)
 	if !ok {
 		return nil, fmt.Errorf("locating layer with ID %q: %w", id, ErrLayerUnknown)
 	}
@@ -1763,7 +1766,7 @@ func (r *layerStore) setBigData(token layerWriteToken, id, key string, data io.R
 	if !r.lockfile.IsReadWrite() {
 		return fmt.Errorf("not allowed to save data items associated with layers at %q: %w", r.layerdir, ErrStoreIsReadOnly)
 	}
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(token.readToken, id)
 	if !ok {
 		return fmt.Errorf("locating layer with ID %q to write bigdata: %w", id, ErrLayerUnknown)
 	}
@@ -1803,23 +1806,23 @@ func (r *layerStore) setBigData(token layerWriteToken, id, key string, data io.R
 	return nil
 }
 
-func (r *layerStore) bigDataNames(_ layerReadToken, id string) ([]string, error) {
-	layer, ok := r.lookup(id)
+func (r *layerStore) bigDataNames(token layerReadToken, id string) ([]string, error) {
+	layer, ok := r.lookup(token, id)
 	if !ok {
 		return nil, fmt.Errorf("locating layer with ID %q to retrieve bigdata names: %w", id, ErrLayerUnknown)
 	}
 	return copyStringSlice(layer.BigDataNames), nil
 }
 
-func (r *layerStore) metadata(_ layerReadToken, id string) (string, error) {
-	if layer, ok := r.lookup(id); ok {
+func (r *layerStore) metadata(token layerReadToken, id string) (string, error) {
+	if layer, ok := r.lookup(token, id); ok {
 		return layer.Metadata, nil
 	}
 	return "", ErrLayerUnknown
 }
 
 func (r *layerStore) setMetadata(token layerWriteToken, id, metadata string) error {
-	if layer, ok := r.lookup(id); ok {
+	if layer, ok := r.lookup(token.readToken, id); ok {
 		layer.Metadata = metadata
 		return r.saveFor(token, layer)
 	}
@@ -1843,7 +1846,7 @@ func layerHasIncompleteFlag(layer *Layer) bool {
 }
 
 func (r *layerStore) deleteInternal(token layerWriteToken, id string) error {
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(token.readToken, id)
 	if !ok {
 		return ErrLayerUnknown
 	}
@@ -1931,7 +1934,7 @@ func (r *layerStore) deleteInDigestMap(_ layerWriteToken, id string) {
 }
 
 func (r *layerStore) delete(token layerWriteToken, id string) error {
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(token.readToken, id)
 	if !ok {
 		return ErrLayerUnknown
 	}
@@ -1954,13 +1957,13 @@ func (r *layerStore) delete(token layerWriteToken, id string) error {
 	return r.saveFor(token, layer)
 }
 
-func (r *layerStore) exists(_ layerReadToken, id string) bool {
-	_, ok := r.lookup(id)
+func (r *layerStore) exists(token layerReadToken, id string) bool {
+	_, ok := r.lookup(token, id)
 	return ok
 }
 
-func (r *layerStore) get(_ layerReadToken, id string) (*Layer, error) {
-	if layer, ok := r.lookup(id); ok {
+func (r *layerStore) get(token layerReadToken, id string) (*Layer, error) {
+	if layer, ok := r.lookup(token, id); ok {
 		return copyLayer(layer), nil
 	}
 	return nil, ErrLayerUnknown
@@ -1984,7 +1987,7 @@ func (r *layerStore) wipe(token layerWriteToken) error {
 
 func (r *layerStore) findParentAndLayer(token layerReadToken, from, to string) (fromID string, toID string, fromLayer, toLayer *Layer, err error) {
 	var ok bool
-	toLayer, ok = r.lookup(to)
+	toLayer, ok = r.lookup(token, to)
 	if !ok {
 		return "", "", nil, nil, ErrLayerUnknown
 	}
@@ -1993,11 +1996,11 @@ func (r *layerStore) findParentAndLayer(token layerReadToken, from, to string) (
 		from = toLayer.Parent
 	}
 	if from != "" {
-		fromLayer, ok = r.lookup(from)
+		fromLayer, ok = r.lookup(token, from)
 		if ok {
 			from = fromLayer.ID
 		} else {
-			fromLayer, ok = r.lookup(toLayer.Parent)
+			fromLayer, ok = r.lookup(token, toLayer.Parent)
 			if ok {
 				from = fromLayer.ID
 			}
@@ -2232,7 +2235,7 @@ func (r *layerStore) applyDiff(token layerWriteToken, to string, diff io.Reader)
 }
 
 func (r *layerStore) applyDiffWithOptions(token layerWriteToken, to string, layerOptions *LayerOptions, diff io.Reader) (size int64, err error) {
-	layer, ok := r.lookup(to)
+	layer, ok := r.lookup(token.readToken, to)
 	if !ok {
 		return -1, ErrLayerUnknown
 	}
@@ -2378,7 +2381,7 @@ func (r *layerStore) differTarget(token layerWriteToken, id string) (string, err
 	if !ok {
 		return "", ErrNotSupported
 	}
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(token.readToken, id)
 	if !ok {
 		return "", ErrLayerUnknown
 	}
@@ -2390,7 +2393,7 @@ func (r *layerStore) applyDiffFromStagingDirectory(token layerWriteToken, id, st
 	if !ok {
 		return ErrNotSupported
 	}
-	layer, ok := r.lookup(id)
+	layer, ok := r.lookup(token.readToken, id)
 	if !ok {
 		return ErrLayerUnknown
 	}
@@ -2434,7 +2437,7 @@ func (r *layerStore) applyDiffWithDiffer(token layerWriteToken, to string, optio
 		return &output, err
 	}
 
-	layer, ok := r.lookup(to)
+	layer, ok := r.lookup(token.readToken, to)
 	if !ok {
 		return nil, ErrLayerUnknown
 	}
@@ -2465,7 +2468,7 @@ func (r *layerStore) cleanupStagingDirectory(_ layerWriteToken, stagingDirectory
 func (r *layerStore) layersByDigestMap(token layerReadToken, m map[digest.Digest][]string, d digest.Digest) ([]Layer, error) {
 	var layers []Layer
 	for _, layerID := range m[d] {
-		layer, ok := r.lookup(layerID)
+		layer, ok := r.lookup(token, layerID)
 		if !ok {
 			return nil, ErrLayerUnknown
 		}

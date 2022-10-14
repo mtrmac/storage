@@ -760,6 +760,7 @@ func (r *layerStore) GarbageCollect() error {
 }
 
 func (r *layerStore) mountspath() string {
+	// No token: Only reads a constant field.
 	return filepath.Join(r.rundir, "mountpoints.json")
 }
 

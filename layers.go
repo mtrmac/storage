@@ -977,7 +977,7 @@ func (r *layerStore) loadMounts() error {
 // The caller must hold r.lockfile locked for writing.
 // The caller must hold r.inProcessLock for WRITING.
 // FIXME: require layerWriteToken
-func (r *layerStore) save(saveLocations layerLocations) error {
+func (r *layerStore) save(token layerWriteToken, saveLocations layerLocations) error {
 	r.mountsLockfile.Lock()
 	defer r.mountsLockfile.Unlock()
 	if err := r.saveLayers(saveLocations); err != nil {
@@ -989,9 +989,8 @@ func (r *layerStore) save(saveLocations layerLocations) error {
 // saveFor saves the contents of the store relevant for modifiedLayer to disk.
 // The caller must hold r.lockfile locked for writing.
 // The caller must hold r.inProcessLock for WRITING.
-// FIXME: layerWriteToken
-func (r *layerStore) saveFor(modifiedLayer *Layer) error {
-	return r.save(layerLocation(modifiedLayer))
+func (r *layerStore) saveFor(token layerWriteToken, modifiedLayer *Layer) error {
+	return r.save(token, layerLocation(modifiedLayer))
 }
 
 // The caller must hold r.lockfile locked for writing.
@@ -1293,7 +1292,7 @@ func (r *layerStore) putAdditionalLayer(token layerWriteToken, id string, parent
 	if layer.UncompressedDigest != "" {
 		r.byuncompressedsum[layer.UncompressedDigest] = append(r.byuncompressedsum[layer.UncompressedDigest], layer.ID)
 	}
-	if err := r.saveFor(layer); err != nil {
+	if err := r.saveFor(token, layer); err != nil {
 		if err2 := r.driver.Remove(id); err2 != nil {
 			logrus.Errorf("While recovering from a failure to save layers, error deleting layer %#v: %v", id, err2)
 		}
@@ -1419,7 +1418,7 @@ func (r *layerStore) put(token layerWriteToken, id string, parentLayer *Layer, n
 		}
 	}()
 
-	err := r.saveFor(layer)
+	err := r.saveFor(token, layer)
 	if err != nil {
 		cleanupFailureContext = "saving incomplete layer metadata"
 		return nil, -1, err
@@ -1485,7 +1484,7 @@ func (r *layerStore) put(token layerWriteToken, id string, parentLayer *Layer, n
 		}
 	}
 	delete(layer.Flags, incompleteFlag)
-	err = r.saveFor(layer)
+	err = r.saveFor(token, layer)
 	if err != nil {
 		cleanupFailureContext = "saving finished layer metadata"
 		return nil, -1, err
@@ -1735,7 +1734,7 @@ func (r *layerStore) updateNames(token layerWriteToken, id string, names []strin
 		r.byname[name] = layer
 	}
 	layer.Names = names
-	return r.saveFor(layer)
+	return r.saveFor(token, layer)
 }
 
 func (r *layerStore) datadir(id string) string {
@@ -1799,7 +1798,7 @@ func (r *layerStore) setBigData(token layerWriteToken, id, key string, data io.R
 	}
 	if addName {
 		layer.BigDataNames = append(layer.BigDataNames, key)
-		return r.saveFor(layer)
+		return r.saveFor(token, layer)
 	}
 	return nil
 }
@@ -1819,10 +1818,10 @@ func (r *layerStore) metadata(_ layerReadToken, id string) (string, error) {
 	return "", ErrLayerUnknown
 }
 
-func (r *layerStore) setMetadata(_ layerWriteToken, id, metadata string) error {
+func (r *layerStore) setMetadata(token layerWriteToken, id, metadata string) error {
 	if layer, ok := r.lookup(id); ok {
 		layer.Metadata = metadata
-		return r.saveFor(layer)
+		return r.saveFor(token, layer)
 	}
 	return ErrLayerUnknown
 }
@@ -1854,7 +1853,7 @@ func (r *layerStore) deleteInternal(token layerWriteToken, id string) error {
 			layer.Flags = make(map[string]interface{})
 		}
 		layer.Flags[incompleteFlag] = true
-		if err := r.saveFor(layer); err != nil {
+		if err := r.saveFor(token, layer); err != nil {
 			return err
 		}
 	}
@@ -1952,7 +1951,7 @@ func (r *layerStore) delete(token layerWriteToken, id string) error {
 	if err := r.deleteInternal(token, id); err != nil {
 		return err
 	}
-	return r.saveFor(layer)
+	return r.saveFor(token, layer)
 }
 
 func (r *layerStore) exists(_ layerReadToken, id string) bool {
@@ -2369,7 +2368,7 @@ func (r *layerStore) applyDiffWithOptions(token layerWriteToken, to string, laye
 		return layer.GIDs[i] < layer.GIDs[j]
 	})
 
-	err = r.saveFor(layer)
+	err = r.saveFor(token, layer)
 
 	return size, err
 }
@@ -2410,7 +2409,7 @@ func (r *layerStore) applyDiffFromStagingDirectory(token layerWriteToken, id, st
 	layer.UncompressedDigest = diffOutput.UncompressedDigest
 	layer.UncompressedSize = diffOutput.Size
 	layer.Metadata = diffOutput.Metadata
-	if err = r.saveFor(layer); err != nil {
+	if err = r.saveFor(token, layer); err != nil {
 		return err
 	}
 	for k, v := range diffOutput.BigData {
@@ -2451,7 +2450,7 @@ func (r *layerStore) applyDiffWithDiffer(token layerWriteToken, to string, optio
 	}
 	layer.UIDs = output.UIDs
 	layer.GIDs = output.GIDs
-	err = r.saveFor(layer)
+	err = r.saveFor(token, layer)
 	return &output, err
 }
 

@@ -244,13 +244,13 @@ type roLayerStore interface {
 	// found, it returns an error.
 	size(token layerReadToken, name string) (int64, error)
 
-	// LayersByCompressedDigest returns a slice of the layers with the
+	// layersByCompressedDigest returns a slice of the layers with the
 	// specified compressed digest value recorded for them.
-	LayersByCompressedDigest(d digest.Digest) ([]Layer, error)
+	layersByCompressedDigest(token layerReadToken, d digest.Digest) ([]Layer, error)
 
-	// LayersByUncompressedDigest returns a slice of the layers with the
+	// layersByUncompressedDigest returns a slice of the layers with the
 	// specified uncompressed digest value recorded for them.
-	LayersByUncompressedDigest(d digest.Digest) ([]Layer, error)
+	layersByUncompressedDigest(token layerReadToken, d digest.Digest) ([]Layer, error)
 
 	// getLayers returns a slice of the known layers.
 	getLayers(layerReadToken) ([]Layer, error)
@@ -454,15 +454,6 @@ func (r *layerStore) privateGetLayerReadToken() layerReadToken {
 // Almost all users should call layerReadAccess() instead.
 func (r *layerStore) privatePutLayerReadToken(token layerReadToken) {
 	r.inProcessLock.RUnlock()
-}
-
-// privateWithFakeLayerReadToken obtains a  fake layerReadToken and calls fn
-// DO NOT CALL THIS EVER, it exists only as an interim PR artifact.
-// Almost all users should call layerReadAccess() instead.
-// FIXME: Eventually eliminate this.
-func (r *layerStore) privateWithFakeLayerReadToken(fn func(token layerReadToken)) {
-	token := layerReadToken{}
-	fn(token)
 }
 
 // startWritingWithReload makes sure the store is fresh if canReload, and locks it for writing.
@@ -2496,8 +2487,7 @@ func (r *layerStore) cleanupStagingDirectory(_ layerWriteToken, stagingDirectory
 	return ddriver.CleanupStagingDirectory(stagingDirectory)
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) layersByDigestMap(m map[digest.Digest][]string, d digest.Digest) ([]Layer, error) {
+func (r *layerStore) layersByDigestMap(token layerReadToken, m map[digest.Digest][]string, d digest.Digest) ([]Layer, error) {
 	var layers []Layer
 	for _, layerID := range m[d] {
 		layer, ok := r.lookup(layerID)
@@ -2509,14 +2499,12 @@ func (r *layerStore) layersByDigestMap(m map[digest.Digest][]string, d digest.Di
 	return layers, nil
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) LayersByCompressedDigest(d digest.Digest) ([]Layer, error) {
-	return r.layersByDigestMap(r.bycompressedsum, d)
+func (r *layerStore) layersByCompressedDigest(token layerReadToken, d digest.Digest) ([]Layer, error) {
+	return r.layersByDigestMap(token, r.bycompressedsum, d)
 }
 
-// Requires startReading or startWriting.
-func (r *layerStore) LayersByUncompressedDigest(d digest.Digest) ([]Layer, error) {
-	return r.layersByDigestMap(r.byuncompressedsum, d)
+func (r *layerStore) layersByUncompressedDigest(token layerReadToken, d digest.Digest) ([]Layer, error) {
+	return r.layersByDigestMap(token, r.byuncompressedsum, d)
 }
 
 func (r *layerStore) supportsShifting() bool {

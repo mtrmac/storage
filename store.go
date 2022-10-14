@@ -2718,10 +2718,10 @@ func (s *store) ApplyDiff(to string, diff io.Reader) (int64, error) {
 	})
 }
 
-func (s *store) layersByMappedDigest(m func(roLayerStore, digest.Digest) ([]Layer, error), d digest.Digest) ([]Layer, error) {
+func (s *store) layersByMappedDigest(m func(roLayerStore, layerReadToken, digest.Digest) ([]Layer, error), d digest.Digest) ([]Layer, error) {
 	var layers []Layer
 	if _, _, err := readAllLayerStores(s, func(store roLayerStore, token layerReadToken) (void, bool, error) {
-		storeLayers, err := m(store, d)
+		storeLayers, err := m(store, token, d)
 		if err != nil {
 			if !errors.Is(err, ErrLayerUnknown) {
 				return void{}, true, err
@@ -2743,14 +2743,18 @@ func (s *store) LayersByCompressedDigest(d digest.Digest) ([]Layer, error) {
 	if err := d.Validate(); err != nil {
 		return nil, fmt.Errorf("looking for compressed layers matching digest %q: %w", d, err)
 	}
-	return s.layersByMappedDigest(func(r roLayerStore, d digest.Digest) ([]Layer, error) { return r.LayersByCompressedDigest(d) }, d)
+	return s.layersByMappedDigest(func(r roLayerStore, token layerReadToken, d digest.Digest) ([]Layer, error) {
+		return r.layersByCompressedDigest(token, d)
+	}, d)
 }
 
 func (s *store) LayersByUncompressedDigest(d digest.Digest) ([]Layer, error) {
 	if err := d.Validate(); err != nil {
 		return nil, fmt.Errorf("looking for layers matching digest %q: %w", d, err)
 	}
-	return s.layersByMappedDigest(func(r roLayerStore, d digest.Digest) ([]Layer, error) { return r.LayersByUncompressedDigest(d) }, d)
+	return s.layersByMappedDigest(func(r roLayerStore, token layerReadToken, d digest.Digest) ([]Layer, error) {
+		return r.layersByUncompressedDigest(token, d)
+	}, d)
 }
 
 func (s *store) LayerSize(id string) (int64, error) {

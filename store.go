@@ -1363,9 +1363,8 @@ func (s *store) CreateImage(id string, names []string, layer, metadata string, o
 // - ristore must be locked EITHER for reading or writing
 // - s.imageStore must be locked for writing; it might be identical to ristore.
 // - rlstore must be locked for writing
-// - lstores must all be locked for reading
-// FIXME: Convert this
-func (s *store) imageTopLayerForMapping(image *Image, ristore roImageStore, rlstore rwLayerStore, lstores []roLayerStore, options types.IDMappingOptions) (*Layer, error) {
+// - lockedLayerStores must all be locked for reading
+func (s *store) imageTopLayerForMapping(image *Image, ristore roImageStore, rlstore rwLayerStore, layerToken layerWriteToken, lockedLayerStores []lockedLayerStore, options types.IDMappingOptions) (*Layer, error) {
 	layerMatchesMappingOptions := func(layer *Layer, options types.IDMappingOptions) bool {
 		// If the driver supports shifting and the layer has no mappings, we can use it.
 		if canUseShifting(rlstore, options.UIDMap, options.GIDMap) && len(layer.UIDMap) == 0 && len(layer.GIDMap) == 0 {
@@ -1382,20 +1381,23 @@ func (s *store) imageTopLayerForMapping(image *Image, ristore roImageStore, rlst
 		return reflect.DeepEqual(layer.UIDMap, options.UIDMap) && reflect.DeepEqual(layer.GIDMap, options.GIDMap)
 	}
 	var layer, parentLayer *Layer
-	allStores := append([]roLayerStore{rlstore}, lstores...)
+	allStores := append([]lockedLayerStore{{
+		store: rlstore,
+		token: layerToken.readToken,
+	}}, lockedLayerStores...)
 	// Locate the image's top layer and its parent, if it has one.
 	createMappedLayer := ristore == s.imageStore
 	for _, s := range allStores {
 		store := s
 		// Walk the top layer list.
 		for _, candidate := range append([]string{image.TopLayer}, image.MappedTopLayers...) {
-			if cLayer, err := store.Get(candidate); err == nil {
+			if cLayer, err := store.store.get(store.token, candidate); err == nil {
 				// We want the layer's parent, too, if it has one.
 				var cParentLayer *Layer
 				if cLayer.Parent != "" {
 					// Its parent should be in one of the stores, somewhere.
 					for _, ps := range allStores {
-						if cParentLayer, err = ps.Get(cLayer.Parent); err == nil {
+						if cParentLayer, err = ps.store.get(ps.token, cLayer.Parent); err == nil {
 							break
 						}
 					}
@@ -1413,7 +1415,7 @@ func (s *store) imageTopLayerForMapping(image *Image, ristore roImageStore, rlst
 				if layer == nil {
 					layer = cLayer
 					parentLayer = cParentLayer
-					if store != rlstore {
+					if store.store != rlstore {
 						// The layer is in another store, so we cannot
 						// create a mapped version of it to the image.
 						createMappedLayer = false
@@ -1455,13 +1457,13 @@ func (s *store) imageTopLayerForMapping(image *Image, ristore roImageStore, rlst
 		}
 	}
 	layerOptions.TemplateLayer = layer.ID
-	mappedLayer, _, err := rlstore.Put("", parentLayer, nil, layer.MountLabel, nil, &layerOptions, false, nil, nil)
+	mappedLayer, _, err := rlstore.put(layerToken, "", parentLayer, nil, layer.MountLabel, nil, &layerOptions, false, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating an ID-mapped copy of layer %q: %w", layer.ID, err)
 	}
 	// By construction, createMappedLayer can only be true if ristore == s.imageStore.
 	if err = s.imageStore.addMappedTopLayer(image.ID, mappedLayer.ID); err != nil {
-		if err2 := rlstore.Delete(mappedLayer.ID); err2 != nil {
+		if err2 := rlstore.delete(layerToken, mappedLayer.ID); err2 != nil {
 			err = fmt.Errorf("deleting layer %q: %v: %w", mappedLayer.ID, err2, err)
 		}
 		return nil, fmt.Errorf("registering ID-mapped layer with image %q: %w", image.ID, err)
@@ -1469,7 +1471,6 @@ func (s *store) imageTopLayerForMapping(image *Image, ristore roImageStore, rlst
 	return mappedLayer, nil
 }
 
-// FIXME: Convert this
 func (s *store) CreateContainer(id string, names []string, image, layer, metadata string, options *ContainerOptions) (*Container, error) {
 	if options == nil {
 		options = &ContainerOptions{}
@@ -1480,7 +1481,7 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 	if options.HostGIDMapping {
 		options.GIDMap = nil
 	}
-	rlstore, lstores, err := s.bothLayerStoreKinds() // lstores will be locked read-only if image != ""
+	rlstore, unlockedLayerStores, err := s.bothLayerStoreKinds() // unlockedLayerStores will be locked read-only if image != ""
 	if err != nil {
 		return nil, err
 	}
@@ -1500,20 +1501,28 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 	var imageHomeStore roImageStore // Set if image != ""
 	// s.imageStore is locked read-write, if image != ""
 	// s.roImageStores are NOT NECESSARILY ALL locked read-only if image != ""
-	var cimage *Image // Set if image != ""
+	var lockedLayerStores []lockedLayerStore // Set, and locked read-only, if image != ""
+	var layerToken layerWriteToken           // Set if image != ""
+	var cimage *Image                        // Set if image != ""
 	if image != "" {
-		layerToken, err := rlstore.startWriting()
+		lt, err := rlstore.startWriting()
 		if err != nil {
 			return nil, err
 		}
+		layerToken = lt
 		defer rlstore.stopWriting(layerToken)
-		for _, s := range lstores {
+		lockedLayerStores = make([]lockedLayerStore, 0, len(unlockedLayerStores))
+		for _, s := range unlockedLayerStores {
 			store := s
-			lToken, err := store.startReading()
+			token, err := store.startReading()
 			if err != nil {
 				return nil, err
 			}
-			defer store.stopReading(lToken)
+			defer store.stopReading(token)
+			lockedLayerStores = append(lockedLayerStores, lockedLayerStore{
+				store: store,
+				token: token,
+			})
 		}
 		if err := s.imageStore.startWriting(); err != nil {
 			return nil, err
@@ -1544,7 +1553,7 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 
 	if options.AutoUserNs {
 		var err error
-		options.UIDMap, options.GIDMap, err = s.getAutoUserNS(&options.AutoUserNsOpts, cimage, rlstore, lstores)
+		options.UIDMap, options.GIDMap, err = s.getAutoUserNS(&options.AutoUserNsOpts, cimage, rlstore, layerToken, lockedLayerStores)
 		if err != nil {
 			return nil, err
 		}
@@ -1556,7 +1565,7 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 	idMappingsOptions := options.IDMappingOptions
 	if image != "" {
 		if cimage.TopLayer != "" {
-			ilayer, err := s.imageTopLayerForMapping(cimage, imageHomeStore, rlstore, lstores, idMappingsOptions)
+			ilayer, err := s.imageTopLayerForMapping(cimage, imageHomeStore, rlstore, layerToken, lockedLayerStores, idMappingsOptions)
 			if err != nil {
 				return nil, err
 			}
@@ -1570,10 +1579,11 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 			}
 		}
 	} else {
-		layerToken, err := rlstore.startWriting()
+		lt, err := rlstore.startWriting()
 		if err != nil {
 			return nil, err
 		}
+		layerToken = lt
 		defer rlstore.stopWriting(layerToken)
 		if !options.HostUIDMapping && len(options.UIDMap) == 0 {
 			uidMap = s.uidMap
@@ -1624,7 +1634,7 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 		options.Flags[mountLabelFlag] = mountLabel
 	}
 
-	clayer, err := rlstore.Create(layer, imageTopLayer, nil, mlabel, options.StorageOpt, layerOptions, true)
+	clayer, err := rlstore.create(layerToken, layer, imageTopLayer, nil, mlabel, options.StorageOpt, layerOptions, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1644,7 +1654,7 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
 		}
 		container, err := s.containerStore.Create(id, names, imageID, layer, metadata, options)
 		if err != nil || container == nil {
-			if err2 := rlstore.Delete(layer); err2 != nil {
+			if err2 := rlstore.delete(layerToken, layer); err2 != nil {
 				if err == nil {
 					err = fmt.Errorf("deleting layer %#v: %w", layer, err2)
 				} else {

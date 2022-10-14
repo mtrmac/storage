@@ -112,33 +112,33 @@ type Layer struct {
 	Created time.Time `json:"created,omitempty"`
 
 	// CompressedDigest is the digest of the blob that was last passed to
-	// ApplyDiff() or Put(), as it was presented to us.
+	// ApplyDiff() or put(), as it was presented to us.
 	CompressedDigest digest.Digest `json:"compressed-diff-digest,omitempty"`
 
 	// CompressedSize is the length of the blob that was last passed to
-	// ApplyDiff() or Put(), as it was presented to us.  If
+	// ApplyDiff() or put(), as it was presented to us.  If
 	// CompressedDigest is not set, this should be treated as if it were an
 	// uninitialized value.
 	CompressedSize int64 `json:"compressed-size,omitempty"`
 
 	// UncompressedDigest is the digest of the blob that was last passed to
-	// ApplyDiff() or Put(), after we decompressed it.  Often referred to
+	// ApplyDiff() or put(), after we decompressed it.  Often referred to
 	// as a DiffID.
 	UncompressedDigest digest.Digest `json:"diff-digest,omitempty"`
 
 	// UncompressedSize is the length of the blob that was last passed to
-	// ApplyDiff() or Put(), after we decompressed it.  If
+	// ApplyDiff() or put(), after we decompressed it.  If
 	// UncompressedDigest is not set, this should be treated as if it were
 	// an uninitialized value.
 	UncompressedSize int64 `json:"diff-size,omitempty"`
 
 	// CompressionType is the type of compression which we detected on the blob
-	// that was last passed to ApplyDiff() or Put().
+	// that was last passed to ApplyDiff() or put().
 	CompressionType archive.Compression `json:"compression,omitempty"`
 
 	// UIDs and GIDs are lists of UIDs and GIDs used in the layer.  This
 	// field is only populated (i.e., will only contain one or more
-	// entries) if the layer was created using ApplyDiff() or Put().
+	// entries) if the layer was created using ApplyDiff() or put().
 	UIDs []uint32 `json:"uidset,omitempty"`
 	GIDs []uint32 `json:"gidset,omitempty"`
 
@@ -285,25 +285,15 @@ type rwLayerStore interface {
 	// underlying drivers can accept a "size" option.  At this time, most
 	// underlying drivers do not themselves distinguish between writeable
 	// and read-only layers.
-	Create(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool) (*Layer, error)
+	create(token layerWriteToken, id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool) (*Layer, error)
 
-	// CreateWithFlags combines the functions of Create and SetFlag.
-	CreateWithFlags(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}) (layer *Layer, err error)
-
-	// Put combines the functions of CreateWithFlags and ApplyDiff.
-	// Deprecated: Use put, or almost always higher-level interfaces.
-	Put(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error)
-	// put combines the functions of CreateWithFlags and ApplyDiff.
+	// put combines the functions of create and ApplyDiff.
 	put(token layerWriteToken, id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error)
 
 	// updateNames modifies names associated with a layer based on (op, names).
 	updateNames(token layerWriteToken, id string, names []string, op updateNameOperation) error
 
-	// Delete deletes a layer with the specified name or ID.
-	//
-	// Deprecated: use delete()
-	Delete(id string) error
-	// Delete deletes a layer with the specified name or ID.
+	// delete deletes a layer with the specified name or ID.
 	delete(token layerWriteToken, id string) error
 
 	// wipe deletes all layers.
@@ -313,20 +303,9 @@ type rwLayerStore interface {
 	// layers, it should not be written to.  An SELinux label to be applied to the
 	// mount can be specified to override the one configured for the layer.
 	// The mappings used by the container can be specified.
-	//
-	// Deprecated: Use mount()
-	Mount(id string, options drivers.MountOpts) (string, error)
-	// Mount mounts a layer for use.  If the specified layer is the parent of other
-	// layers, it should not be written to.  An SELinux label to be applied to the
-	// mount can be specified to override the one configured for the layer.
-	// The mappings used by the container can be specified.
 	// writeToken is optional, and can be nil instead.
 	mount(readToken layerReadToken, writeToken *layerWriteToken, id string, options drivers.MountOpts) (string, error)
 
-	// Unmount unmounts a layer when it is no longer in use.
-	//
-	// Deprecated: Use unmount()
-	Unmount(id string, force bool, conditional bool) (bool, error)
 	// unmount unmounts a layer when it is no longer in use.
 	// writeToken is optional, and can be nil instead.
 	// If conditional is set, it will fail with ErrLayerNotMounted if the layer is not mounted (without conditional, the caller is
@@ -1359,18 +1338,6 @@ func (r *layerStore) PutAdditionalLayer(id string, parentLayer *Layer, names []s
 	return copyLayer(layer), nil
 }
 
-// Requires startWriting.
-// Deprecated: Use put
-func (r *layerStore) Put(id string, parentLayer *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error) {
-	var layer *Layer
-	var layerSize int64
-	var err error
-	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
-		layer, layerSize, err = r.put(token, id, parentLayer, names, mountLabel, options, moreOptions, writeable, flags, diff)
-	})
-	return layer, layerSize, err
-}
-
 func (r *layerStore) put(token layerWriteToken, id string, parentLayer *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}, diff io.Reader) (*Layer, int64, error) {
 	if err := os.MkdirAll(r.rundir, 0700); err != nil {
 		return nil, -1, err
@@ -1565,15 +1532,9 @@ func (r *layerStore) put(token layerWriteToken, id string, parentLayer *Layer, n
 	return layer, size, err
 }
 
-// Requires startWriting.
-func (r *layerStore) CreateWithFlags(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool, flags map[string]interface{}) (layer *Layer, err error) {
-	layer, _, err = r.Put(id, parent, names, mountLabel, options, moreOptions, writeable, flags, nil)
+func (r *layerStore) create(token layerWriteToken, id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool) (layer *Layer, err error) {
+	layer, _, err = r.put(token, id, parent, names, mountLabel, options, moreOptions, writeable, nil, nil)
 	return layer, err
-}
-
-// Requires startWriting.
-func (r *layerStore) Create(id string, parent *Layer, names []string, mountLabel string, options map[string]string, moreOptions *LayerOptions, writeable bool) (layer *Layer, err error) {
-	return r.CreateWithFlags(id, parent, names, mountLabel, options, moreOptions, writeable, nil)
 }
 
 func (r *layerStore) mounted(token layerReadToken, id string) (int, error) {
@@ -1592,16 +1553,6 @@ func (r *layerStore) mounted(token layerReadToken, id string) (int, error) {
 	// try to reload it in this function, we just rely on r.load() that happened during
 	// r.startReading() or r.startWriting().
 	return layer.MountCount, nil
-}
-
-// Deprecated: Use mount().
-func (r *layerStore) Mount(id string, options drivers.MountOpts) (string, error) {
-	var mountPoint string
-	var err error
-	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
-		mountPoint, err = r.mount(token.readToken, &token, id, options)
-	})
-	return mountPoint, err
 }
 
 func (r *layerStore) mount(readToken layerReadToken, writeToken *layerWriteToken, id string, options drivers.MountOpts) (string, error) {
@@ -1668,16 +1619,6 @@ func (r *layerStore) mount(readToken layerReadToken, writeToken *layerWriteToken
 		err = r.saveMounts()
 	}
 	return mountpoint, err
-}
-
-// Deprecated: Use unmount
-func (r *layerStore) Unmount(id string, force bool, conditional bool) (bool, error) {
-	var stillMounted bool
-	var err error
-	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
-		stillMounted, err = r.unmount(token.readToken, &token, id, force, conditional)
-	})
-	return stillMounted, err
 }
 
 func (r *layerStore) unmount(readToken layerReadToken, writeToken *layerWriteToken, id string, force bool, conditional bool) (bool, error) {
@@ -2024,15 +1965,6 @@ func (r *layerStore) deleteInDigestMap(_ layerWriteToken, id string) {
 			}
 		}
 	}
-}
-
-// Deprecated: Use delete()
-func (r *layerStore) Delete(id string) error {
-	var err error
-	r.privateWithFakeLayerWriteToken(func(token layerWriteToken) {
-		err = r.delete(token, id)
-	})
-	return err
 }
 
 func (r *layerStore) delete(token layerWriteToken, id string) error {

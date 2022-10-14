@@ -1741,10 +1741,12 @@ func (r *layerStore) updateNames(token layerWriteToken, id string, names []strin
 }
 
 func (r *layerStore) datadir(id string) string {
+	// No token: Only reads a constant field.
 	return filepath.Join(r.layerdir, id)
 }
 
 func (r *layerStore) datapath(id, key string) string {
+	// No token: Only reads a constant field.
 	return filepath.Join(r.datadir(id), makeBigDataBaseName(key))
 }
 
@@ -1830,6 +1832,7 @@ func (r *layerStore) setMetadata(token layerWriteToken, id, metadata string) err
 }
 
 func (r *layerStore) tspath(id string) string {
+	// No token: Only reads a constant field.
 	return filepath.Join(r.layerdir, id+tarSplitSuffix)
 }
 
